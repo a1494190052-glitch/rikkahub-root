@@ -389,7 +389,7 @@ private fun MessagePartsBlock(
                                 if (!loading && settings.displaySetting.enableHtmlRendering && containsHtmlMarkup(processedText)) {
                                     HtmlMessageContent(
                                         content = processedText,
-                                        charName = assistant.name.ifBlank { "assistant" },
+                                        charName = assistant?.name?.ifBlank { "assistant" } ?: "assistant",
                                         userName = settings.displaySetting.userNickname.ifBlank { "user" },
                                         modifier = Modifier
                                             .fillMaxWidth()
