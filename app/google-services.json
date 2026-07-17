@@ -1,0 +1,28 @@
+{
+  "project_info": {
+    "project_number": "102030405060",
+    "project_id": "rikkahub-root-mod",
+    "storage_bucket": "rikkahub-root-mod.appspot.com"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:102030405060:android:aa11bb22cc33dd44ee55",
+        "android_client_info": { "package_name": "me.rerere.rikkahub" }
+      },
+      "oauth_client": [],
+      "api_key": [ { "current_key": "AIzaSyDummyDummyDummyDummyDummyDummy0000000" } ],
+      "services": { "appinvite_service": { "other_platform_oauth_client": [] } }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:102030405060:android:ff66ee77dd88cc99bb00",
+        "android_client_info": { "package_name": "me.rerere.rikkahub.debug" }
+      },
+      "oauth_client": [],
+      "api_key": [ { "current_key": "AIzaSyDummyDummyDummyDummyDummyDummy0000000" } ],
+      "services": { "appinvite_service": { "other_platform_oauth_client": [] } }
+    }
+  ],
+  "configuration_version": "1"
+}
