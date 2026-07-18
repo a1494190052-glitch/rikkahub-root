@@ -21,6 +21,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.webkit.WebViewAssetLoader
+import me.rerere.rikkahub.data.model.CardVariableStore
 import me.rerere.rikkahub.utils.toCssHex
 import java.io.File
 
@@ -70,6 +71,7 @@ fun HtmlMessageContent(
     charName: String,
     userName: String,
     modifier: Modifier = Modifier,
+    messageId: String = "",
 ) {
     val context = LocalContext.current
     val density = LocalDensity.current
@@ -94,15 +96,17 @@ fun HtmlMessageContent(
             .replace("{{user}}", userName, ignoreCase = true)
     }
 
-    val htmlDoc = remember(processedContent, colorScheme) {
+    val htmlDoc = remember(processedContent, colorScheme, messageId) {
         buildHtmlMessageDocument(
             content = processedContent,
             textColor = colorScheme.onSurface.toCssHex(),
             linkColor = colorScheme.primary.toCssHex(),
+            messageId = messageId,
         )
     }
 
     val assetLoader = remember { buildAssetLoader(context) }
+    val tavBridge = remember(messageId) { TavBridge(messageId) }
 
     val heightDp = with(density) { contentHeightPx.toDp() }
 
@@ -129,6 +133,7 @@ fun HtmlMessageContent(
                         }
                     }
                 }, "AndroidHeight")
+                addJavascriptInterface(tavBridge, "AndroidTavBridge")
                 webChromeClient = object : android.webkit.WebChromeClient() {
                     override fun onConsoleMessage(message: android.webkit.ConsoleMessage): Boolean {
                         android.util.Log.d(
@@ -176,25 +181,22 @@ fun HtmlMessageContent(
                                         AndroidHeight.post(h);
                                     }
                                 }
-                                function postHeight() {
+                                function scheduleMeasure() {
                                     if (scheduled) return;
                                     scheduled = true;
-                                    setTimeout(function() { scheduled = false; measure(); }, 300);
+                                    setTimeout(function() { scheduled = false; measure(); }, 120);
                                 }
-                                if (window.__heightObserverInstalled) { postHeight(); return; }
+                                if (window.__heightObserverInstalled) { scheduleMeasure(); return; }
                                 window.__heightObserverInstalled = true;
-                                // 不监听 style 属性: GSAP 等动画每帧改 style,
-                                // 会导致 observer 高频触发 -> 滚动卡顿
-                                new MutationObserver(postHeight)
-                                    .observe(document.documentElement, {
-                                        childList: true, subtree: true,
-                                        characterData: true,
-                                        attributes: true,
-                                        attributeFilter: ['class', 'id', 'src', 'href', 'open', 'width', 'height', 'colspan', 'rowspan']
-                                    });
-                                window.addEventListener('load', postHeight);
-                                window.addEventListener('resize', postHeight);
-                                postHeight();
+                                // ResizeObserver (Tavo 方案): 只在 body 尺寸真正变化时触发,
+                                // CSS transform 动画不触发 -> 不会随动画帧风暴
+                                if (typeof ResizeObserver !== 'undefined') {
+                                    new ResizeObserver(scheduleMeasure).observe(document.documentElement);
+                                    if (document.body) new ResizeObserver(scheduleMeasure).observe(document.body);
+                                }
+                                window.addEventListener('load', scheduleMeasure);
+                                window.addEventListener('resize', scheduleMeasure);
+                                scheduleMeasure();
                                 setTimeout(measure, 500);
                                 setTimeout(measure, 1500);
                                 setTimeout(measure, 3500);
@@ -301,6 +303,161 @@ private fun buildAssetLoader(context: android.content.Context): WebViewAssetLoad
 }
 
 /**
+ * MVU / TavoJS 变量桥的 WebView 接口
+ */
+private class TavBridge(private val messageId: String) {
+    private fun id(id: String?): String = if (id.isNullOrBlank()) messageId else id
+
+    @JavascriptInterface
+    fun getData(id: String): String = CardVariableStore.getData(id(id))
+
+    @JavascriptInterface
+    fun setData(id: String, json: String) = CardVariableStore.setData(id(id), json)
+
+    @JavascriptInterface
+    fun removeData(id: String) = CardVariableStore.removeData(id(id))
+
+    @JavascriptInterface
+    fun getVar(id: String, name: String): String? = CardVariableStore.getVar(id(id), name)
+
+    @JavascriptInterface
+    fun setVar(id: String, name: String, json: String) = CardVariableStore.setVar(id(id), name, json)
+
+    @JavascriptInterface
+    fun unsetVar(id: String, name: String) = CardVariableStore.unsetVar(id(id), name)
+}
+
+/**
+ * 宿主 API 注入 (对齐酒馆助手/Tavo 标准):
+ * - window.Mvu: MVU 变量库完整实现 (CDN 加载失败也能用)
+ * - waitGlobalInitialized / getCurrentMessageId: 卡的 MVU 就绪判定依赖
+ * - window.tav._getVariable 等: TavoJS 变量桥
+ */
+private fun buildHostApiScript(messageId: String): String {
+    val safeId = messageId.replace("\"", "")
+    return """
+<script>
+(function() {
+  var __MSG_ID = "$safeId";
+  function parsePath(path) {
+    var parts = [];
+    String(path).split('.').forEach(function(seg) {
+      var m = seg.match(/([^\[\]]+)|\[(\d+)\]/g);
+      if (m) m.forEach(function(p) {
+        if (p.charAt(0) === '[') parts.push(Number(p.slice(1, -1)));
+        else parts.push(p);
+      });
+    });
+    return parts;
+  }
+
+  // ---- MVU 变量库 (MagVarUpdate 兼容层) ----
+  if (typeof window.Mvu === 'undefined') {
+    window.Mvu = {
+      getMvuData: function(opt) {
+        var id = (opt && opt.message_id != null) ? String(opt.message_id) : __MSG_ID;
+        var raw = AndroidTavBridge.getData(id);
+        try { return raw ? JSON.parse(raw) : {}; } catch (e) { return {}; }
+      },
+      replaceMvuData: function(data, opt) {
+        var id = (opt && opt.message_id != null) ? String(opt.message_id) : __MSG_ID;
+        AndroidTavBridge.setData(id, JSON.stringify(data == null ? {} : data));
+        return true;
+      },
+      initMvuData: function(opt) {
+        var d = this.getMvuData(opt);
+        if (!d || typeof d !== 'object' || Array.isArray(d)) d = {};
+        if (!d.stat_data || typeof d.stat_data !== 'object') d.stat_data = {};
+        this.replaceMvuData(d, opt);
+        return d;
+      },
+      getMvuVariable: function(path, opt) {
+        var cur = this.getMvuData(opt);
+        var parts = parsePath(path);
+        for (var i = 0; i < parts.length; i++) {
+          if (cur == null) return opt ? opt.default_value : undefined;
+          cur = cur[parts[i]];
+        }
+        return cur === undefined ? (opt ? opt.default_value : undefined) : cur;
+      },
+      setMvuVariable: function(path, value, opt) {
+        var d = this.getMvuData(opt);
+        if (!d || typeof d !== 'object') d = {};
+        var parts = parsePath(path);
+        var cur = d;
+        for (var i = 0; i < parts.length - 1; i++) {
+          var k = parts[i];
+          if (typeof cur[k] !== 'object' || cur[k] === null) {
+            cur[k] = (typeof parts[i + 1] === 'number') ? [] : {};
+          }
+          cur = cur[k];
+        }
+        cur[parts[parts.length - 1]] = value;
+        this.replaceMvuData(d, opt);
+        return value;
+      },
+      deleteMvuVariable: function(path, opt) {
+        var d = this.getMvuData(opt);
+        var parts = parsePath(path);
+        var cur = d;
+        for (var i = 0; i < parts.length - 1; i++) {
+          if (cur == null) return false;
+          cur = cur[parts[i]];
+        }
+        if (cur != null) { delete cur[parts[parts.length - 1]]; this.replaceMvuData(d, opt); return true; }
+        return false;
+      },
+      removeMvuData: function(opt) {
+        var id = (opt && opt.message_id != null) ? String(opt.message_id) : __MSG_ID;
+        AndroidTavBridge.removeData(id);
+        return true;
+      }
+    };
+  }
+
+  // ---- 酒馆助手兼容: 卡的 MVU 就绪判定 ----
+  if (typeof window.waitGlobalInitialized !== 'function') {
+    window.waitGlobalInitialized = function(name) {
+      return new Promise(function(resolve) {
+        if (typeof window[name] !== 'undefined') { resolve(window[name]); return; }
+        var n = 0;
+        var timer = setInterval(function() {
+          if (typeof window[name] !== 'undefined' || ++n > 100) {
+            clearInterval(timer);
+            resolve(window[name]);
+          }
+        }, 100);
+      });
+    };
+  }
+  if (typeof window.getCurrentMessageId !== 'function') {
+    window.getCurrentMessageId = function() { return __MSG_ID; };
+  }
+
+  // ---- TavoJS 变量桥 ----
+  window.tav = window.tav || {};
+  if (typeof window.tav._getVariable !== 'function') {
+    window.tav._getVariable = function(name, def) {
+      var raw = AndroidTavBridge.getVar(__MSG_ID, name);
+      if (raw == null) return def;
+      try { return JSON.parse(raw); } catch (e) { return def; }
+    };
+    window.tav._setVariable = function(name, value) {
+      AndroidTavBridge.setVar(__MSG_ID, name, JSON.stringify(value == null ? null : value));
+    };
+    window.tav._updateVariable = function(name, value) {
+      AndroidTavBridge.setVar(__MSG_ID, name, JSON.stringify(value == null ? null : value));
+    };
+    window.tav._unsetVariable = function(name) {
+      AndroidTavBridge.unsetVar(__MSG_ID, name);
+    };
+  }
+})();
+</script>
+""".trimIndent()
+}
+
+/**
  * 包装消息 HTML 为完整文档
  *
  * 内容直接作为文档加载 (非 innerHTML 注入) — innerHTML 插入的 <script>
@@ -311,6 +468,7 @@ private fun buildHtmlMessageDocument(
     content: String,
     textColor: String,
     linkColor: String,
+    messageId: String,
 ): String {
     val baseHead = buildString {
         append("<meta charset=\"UTF-8\">")
@@ -364,6 +522,8 @@ private fun buildHtmlMessageDocument(
             """.trimIndent()
         )
         append("</script>")
+        // 宿主 API: MVU 变量库 + 酒馆助手就绪判定 + TavoJS 变量桥
+        append(buildHostApiScript(messageId))
     }
 
     return when {

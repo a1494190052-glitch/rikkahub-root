@@ -392,6 +392,7 @@ private fun MessagePartsBlock(
                                         content = processedText,
                                         charName = assistant?.name?.ifBlank { "assistant" } ?: "assistant",
                                         userName = settings.displaySetting.userNickname.ifBlank { "user" },
+                                        messageId = message.id.toString(),
                                         modifier = Modifier
                                             .fillMaxWidth()
                                             .animateContentSize()
