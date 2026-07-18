@@ -85,6 +85,7 @@ val appModule = module {
             templateTransformer = get(),
             providerManager = get(),
             localTools = get(),
+            subAgentExecutor = get(),
             mcpManager = get(),
             filesManager = get(),
             skillManager = get(),

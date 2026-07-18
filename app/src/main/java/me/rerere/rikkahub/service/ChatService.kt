@@ -146,6 +146,7 @@ class ChatService(
     private val templateTransformer: TemplateTransformer,
     private val providerManager: ProviderManager,
     private val localTools: LocalTools,
+    private val subAgentExecutor: me.rerere.rikkahub.data.ai.tools.local.SubAgentExecutor,
     val mcpManager: McpManager,
     private val filesManager: FilesManager,
     private val skillManager: SkillManager,
@@ -537,6 +538,11 @@ class ChatService(
                         addAll(createSearchTools(settings))
                     }
                     addAll(localTools.getTools(assistant.localTools))
+                    // 智能体集群: 招聘子代理并行执行子任务 (SubAgentTools.kt)
+                    if (assistant.localTools.contains(me.rerere.rikkahub.data.ai.tools.local.LocalToolOption.SubAgents)) {
+                        add(me.rerere.rikkahub.data.ai.tools.local.buildHireAgentTool(subAgentExecutor, assistant))
+                        add(me.rerere.rikkahub.data.ai.tools.local.buildHireTeamTool(subAgentExecutor, assistant))
+                    }
                     if (assistant.enableRecentChatsReference) {
                         addAll(createConversationTools(conversationRepo, assistant.id))
                     }
