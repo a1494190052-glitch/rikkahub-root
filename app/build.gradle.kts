@@ -22,8 +22,10 @@ android {
         applicationId = "me.rerere.rikkahub"
         minSdk = 26
         targetSdk = 37
-        versionCode = 170
-        versionName = "2.4.2"
+        // 二改：CI 自动递增版本号 (run_number 单调递增, 本地构建回退为基础版本)
+        val ciRunNumber = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull() ?: 0
+        versionCode = 170 + ciRunNumber
+        versionName = "2.4.2" + if (ciRunNumber > 0) "-r$ciRunNumber" else ""
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 

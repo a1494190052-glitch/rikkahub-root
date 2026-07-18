@@ -54,9 +54,16 @@ jobs:
           chmod +x gradlew
           ./gradlew assembleDebug
 
+      - name: Rename APK with version
+        run: |
+          cd app/build/outputs/apk/debug
+          for f in *.apk; do
+            mv "$f" "rikkahub-root-2.4.2-r${GITHUB_RUN_NUMBER}-arm64.apk"
+          done
+
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: rikkahub-root-apk
+          name: rikkahub-root-2.4.2-r${{ github.run_number }}-arm64
           path: app/build/outputs/apk/debug/*.apk
           retention-days: 14
