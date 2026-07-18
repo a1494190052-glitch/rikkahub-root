@@ -295,9 +295,9 @@ private fun buildHtmlMessageDocument(
         content.contains("</head>", ignoreCase = true) ->
             content.replaceFirst(Regex("</head>", RegexOption.IGNORE_CASE), "$baseHead</head>")
 
-        // 有 body 无 head: 插到 body 开标签后
+        // 有 body 无 head: 插到 body 开标签后 (body 开标签唯一, replace 等价 replaceFirst)
         Regex("<body[^>]*>", RegexOption.IGNORE_CASE).containsMatchIn(content) ->
-            content.replaceFirst(Regex("<body[^>]*>", RegexOption.IGNORE_CASE)) { it.value + baseHead }
+            content.replace(Regex("<body[^>]*>", RegexOption.IGNORE_CASE)) { it.value + baseHead }
 
         // HTML 片段: 包装为新文档
         else -> "<!DOCTYPE html><html><head>$baseHead</head><body>$content</body></html>"
