@@ -165,6 +165,7 @@ fun ChatMessage(
             MessagePartsBlock(
                 assistant = assistant,
                 role = message.role,
+                messageId = message.id.toString(),
                 parts = message.parts,
                 annotations = message.annotations,
                 loading = loading,
@@ -269,6 +270,7 @@ fun ChatMessage(
 private fun MessagePartsBlock(
     assistant: Assistant?,
     role: MessageRole,
+    messageId: String,
     model: Model?,
     parts: List<UIMessagePart>,
     annotations: List<UIMessageAnnotation>,
