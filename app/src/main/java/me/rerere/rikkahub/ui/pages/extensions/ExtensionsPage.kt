@@ -82,7 +82,7 @@ fun ExtensionsPage() {
                     )
                     item(
                         onClick = { navController.navigate(Screen.ScheduledTasks) },
-                        leadingContent = { Icon(HugeIcons.Clock02, null) },
+                        leadingContent = { Icon(HugeIcons.Time02, null) },
                         headlineContent = { Text(stringResource(R.string.extensions_page_scheduled_tasks)) },
                         supportingContent = { Text(stringResource(R.string.extensions_page_scheduled_tasks_desc)) },
                     )

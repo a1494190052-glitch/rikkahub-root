@@ -39,7 +39,7 @@ import me.rerere.rikkahub.R
 import me.rerere.rikkahub.data.db.entity.ScheduledTaskEntity
 import me.rerere.rikkahub.service.scheduler.TaskScheduler
 import me.rerere.rikkahub.ui.components.nav.BackButton
-import me.rerere.rikkahub.ui.icons.HugeIcons
+import me.rerere.hugeicons.HugeIcons
 import me.rerere.rikkahub.utils.plus
 import org.koin.androidx.compose.koinViewModel
 import java.text.SimpleDateFormat
