@@ -47,6 +47,21 @@ fun unwrapHtmlFences(text: String): String {
     return HTML_FENCE_REGEX.replace(text) { it.groupValues[1].trim() }
 }
 
+/** HTML 转义, 防止 {{char}}/{{user}} 中的特殊字符破坏 DOM 或注入脚本 */
+private val HTML_ESCAPE_MAP = mapOf(
+    '&' to "&amp;",
+    '<' to "&lt;",
+    '>' to "&gt;",
+    '"' to "&quot;",
+    '\'' to "&#39;",
+)
+
+private fun String.htmlEscape(): String = buildString(length) {
+    for (ch in this@htmlEscape) {
+        append(HTML_ESCAPE_MAP[ch] ?: ch.toString())
+    }
+}
+
 /** 全屏布局特征: 内容主要用 fixed/absolute/100vh 定位, 不占文档流 */
 private val FULLSCREEN_LAYOUT_REGEX = Regex(
     "(?i)position:\\s*(fixed|absolute)|\\d+vh\\b|height:\\s*100%"
@@ -92,8 +107,8 @@ fun HtmlMessageContent(
     // 显示层占位符替换 + ```html 栅栏剥离 (ST 渲染行为)
     val processedContent = remember(content, charName, userName) {
         unwrapHtmlFences(content)
-            .replace("{{char}}", charName, ignoreCase = true)
-            .replace("{{user}}", userName, ignoreCase = true)
+            .replace("{{char}}", charName.htmlEscape(), ignoreCase = true)
+            .replace("{{user}}", userName.htmlEscape(), ignoreCase = true)
     }
 
     val htmlDoc = remember(processedContent, colorScheme, messageId, charId) {

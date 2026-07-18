@@ -5,7 +5,7 @@ import { cjk } from "@streamdown/cjk";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
-import rehypeRaw from "rehype-raw";
+import rehypeSanitize from "rehype-sanitize";
 import { cn } from "~/lib/utils";
 import { getCodePreviewLanguage } from "~/components/workbench/code-preview-language";
 import { useOptionalWorkbench } from "~/components/workbench/workbench-context";
@@ -113,7 +113,7 @@ export default function Markdown({
     <div className={cn("markdown", className)}>
       <Streamdown
         remarkPlugins={[remarkGfm, remarkMath]}
-        rehypePlugins={[[rehypeKatex, { trust: true, strict: false }], rehypeRaw]}
+        rehypePlugins={[[rehypeKatex, { trust: true, strict: false }], rehypeSanitize]}
         plugins={{ cjk: cjk }}
         animated={{ animation: "fadeIn", sep: 'word', duration: 150 }}
         isAnimating={isAnimating}
