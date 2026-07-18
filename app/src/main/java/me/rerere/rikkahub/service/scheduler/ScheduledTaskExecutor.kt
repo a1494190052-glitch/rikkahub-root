@@ -32,10 +32,12 @@ class ScheduledTaskExecutor(
     private val providerManager: ProviderManager,
     private val scheduledTaskDao: ScheduledTaskDAO,
     private val conversationRepo: ConversationRepository,
+    private val auditLogger: me.rerere.rikkahub.service.shell.ShellAuditLogger,
 ) {
     companion object {
         private const val TAG = "ScheduledTaskExecutor"
         private const val HISTORY_LIMIT = 10
+        private const val SHELL_TASK_TIMEOUT_MS = 120_000L
     }
 
     suspend fun run(taskId: String) {
@@ -60,6 +62,13 @@ class ScheduledTaskExecutor(
     private suspend fun executeTask(task: ScheduledTaskEntity) {
         val settings = settingsStore.settingsFlow.first()
         val assistant = settings.assistants.find { it.id.toString() == task.assistantId } ?: return
+
+        // SHELL 类型: prompt 作为 root shell 命令执行, 输出落会话+通知
+        if (task.actionType == ScheduledTaskEntity.ACTION_SHELL) {
+            executeShellTask(task, assistant)
+            return
+        }
+
         val model = settings.findModelById(assistant.chatModelId, fallback = settings.fastModelId) ?: return
         val provider = model.findProvider(settings.providers) ?: return
         val handler = providerManager.getProviderByType(provider)
@@ -90,6 +99,45 @@ class ScheduledTaskExecutor(
         val conversationId = saveToConversation(task, assistant, existing, reply)
         scheduledTaskDao.markRun(task.id, System.currentTimeMillis(), conversationId)
         notifyUser(task, assistant.name, reply)
+    }
+
+    /** SHELL 任务: 以 root 执行命令, 输出作为 AI 消息落会话 + 通知 */
+    private suspend fun executeShellTask(
+        task: ScheduledTaskEntity,
+        assistant: me.rerere.rikkahub.data.model.Assistant,
+    ) {
+        val startedAt = System.currentTimeMillis()
+        val auditId = auditLogger.start(
+            source = me.rerere.rikkahub.data.db.entity.ShellAuditEntity.SOURCE_SCHEDULED_TASK,
+            command = task.prompt,
+        )
+        val result = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            kotlinx.coroutines.runInterruptible {
+                me.rerere.workspace.RootShellRunner().execute(task.prompt, SHELL_TASK_TIMEOUT_MS)
+            }
+        }
+        val output = buildString {
+            append("$ ").append(task.prompt).append("\n\n")
+            if (result.stdout.isNotBlank()) append(result.stdout.trimEnd()).append('\n')
+            if (result.stderr.isNotBlank()) append("[stderr] ").append(result.stderr.trimEnd()).append('\n')
+            if (result.timedOut) append("[超时] 命令超过 ${SHELL_TASK_TIMEOUT_MS / 1000}s 被终止\n")
+            append("[exit] ").append(result.exitCode)
+        }.take(6000)
+        auditLogger.finish(
+            auditId, startedAt,
+            if (result.timedOut) {
+                me.rerere.rikkahub.data.db.entity.ShellAuditEntity.STATUS_TIMEOUT
+            } else {
+                me.rerere.rikkahub.data.db.entity.ShellAuditEntity.STATUS_DONE
+            },
+            result.exitCode, output,
+        )
+        val existing = task.conversationId?.let { cid ->
+            runCatching { conversationRepo.getConversationById(Uuid.parse(cid)) }.getOrNull()
+        }
+        val conversationId = saveToConversation(task, assistant, existing, output)
+        scheduledTaskDao.markRun(task.id, System.currentTimeMillis(), conversationId)
+        notifyUser(task, assistant.name, output)
     }
 
     /** 追加到任务专属会话（没有则新建，标题 = 任务名） */

@@ -11,12 +11,18 @@ import kotlinx.serialization.json.put
 import me.rerere.ai.core.InputSchema
 import me.rerere.ai.core.Tool
 import me.rerere.ai.ui.UIMessagePart
+import me.rerere.rikkahub.data.db.entity.ShellAuditEntity
+import me.rerere.rikkahub.service.shell.ShellAuditLogger
 import me.rerere.workspace.RootShellRunner
+import me.rerere.workspace.ShellSessionManager
 
 private const val ROOT_SHELL_TIMEOUT_MAX_SECONDS = 600L
 private const val ROOT_SHELL_DEFAULT_TIMEOUT_MS = 30_000L
 
-internal fun buildRootShellTool(): Tool {
+internal fun buildRootShellTool(
+    shellSessionManager: ShellSessionManager? = null,
+    shellAuditLogger: ShellAuditLogger? = null,
+): Tool {
     val runner = RootShellRunner()
     return Tool(
         name = "root_shell",
@@ -26,9 +32,11 @@ internal fun buildRootShellTool(): Tool {
             Useful for system-level operations: pm (install/uninstall apps), am (start activities),
             input (tap/swipe/keyevent UI automation), screencap (screenshots to /sdcard),
             settings (system settings), reading/writing protected files, setprop, etc.
-            Commands run as the root user on the HOST system, not inside any container.
+            Commands run in a PERSISTENT root shell session: cd, exported variables and
+            background processes (&) carry over between calls (pass fresh=true for a one-shot process).
+            The response includes the session's current cwd.
             This is powerful and dangerous: always explain to the user what a command does
-            before running anything destructive.
+            before running anything destructive. Dangerous commands may be blocked by a safety guard.
         """.trimIndent().replace("\n", " "),
         parameters = {
             InputSchema.Obj(
@@ -44,24 +52,74 @@ internal fun buildRootShellTool(): Tool {
                             "Command timeout in seconds. Defaults to 30, max $ROOT_SHELL_TIMEOUT_MAX_SECONDS."
                         )
                     })
+                    put("fresh", buildJsonObject {
+                        put("type", "boolean")
+                        put("description", "true = run in a fresh one-shot process instead of the persistent session")
+                    })
                 },
                 required = listOf("command"),
             )
         },
-        needsApproval = { false },
+        needsApproval = { json ->
+            val command = json.jsonObject["command"]?.jsonPrimitive?.contentOrNull.orEmpty()
+            // 只读命令免审批; 写命令需要用户审批; 高危命令无需审批(execute 直接拒绝)
+            ShellSafety.classify(command) == ShellRisk.WRITE
+        },
         execute = {
             val params = it.jsonObject
             val command = params["command"]?.jsonPrimitive?.contentOrNull
                 ?: error("command is required")
+            val fresh = params["fresh"]?.jsonPrimitive?.contentOrNull?.toBooleanStrictOrNull() == true
             val timeoutMillis = params["timeout"]?.jsonPrimitive?.contentOrNull?.toLongOrNull()
                 ?.coerceIn(1L, ROOT_SHELL_TIMEOUT_MAX_SECONDS)
                 ?.times(1_000L)
                 ?: ROOT_SHELL_DEFAULT_TIMEOUT_MS
-            val result = withContext(Dispatchers.IO) {
-                runInterruptible {
-                    runner.execute(command, timeoutMillis)
-                }
+
+            // 安全闸门: 高危命令直接拒绝
+            ShellSafety.blockReason(command)?.let { reason ->
+                shellAuditLogger?.logCompleted(
+                    source = ShellAuditEntity.SOURCE_AI_ROOT,
+                    command = command,
+                    status = ShellAuditEntity.STATUS_BLOCKED,
+                    outputPreview = "Blocked: $reason",
+                )
+                return@Tool listOf(
+                    UIMessagePart.Text(
+                        buildJsonObject {
+                            put("blocked", true)
+                            put("reason", reason)
+                            put("message", "This command was blocked by the safety guard and was NOT executed.")
+                        }.toString()
+                    )
+                )
             }
+
+            val startedAt = System.currentTimeMillis()
+            val auditId = shellAuditLogger?.start(
+                source = ShellAuditEntity.SOURCE_AI_ROOT,
+                command = command,
+            )
+            val result = try {
+                if (!fresh && shellSessionManager != null) {
+                    runInterruptible(Dispatchers.IO) {
+                        shellSessionManager.execHostRoot(command, cwd = null, timeoutMillis = timeoutMillis)
+                    }
+                } else {
+                    withContext(Dispatchers.IO) {
+                        runInterruptible {
+                            runner.execute(command, timeoutMillis)
+                        }
+                    }
+                }
+            } catch (e: Throwable) {
+                shellAuditLogger?.finish(auditId ?: "", startedAt, ShellAuditEntity.STATUS_ERROR, null, e.message)
+                throw e
+            }
+            val status = if (result.timedOut) ShellAuditEntity.STATUS_TIMEOUT else ShellAuditEntity.STATUS_DONE
+            shellAuditLogger?.finish(
+                auditId ?: "", startedAt, status, result.exitCode,
+                (result.stdout + "\n" + result.stderr).trim(),
+            )
             listOf(
                 UIMessagePart.Text(
                     buildJsonObject {
@@ -70,6 +128,9 @@ internal fun buildRootShellTool(): Tool {
                         put("stderr", result.stderr)
                         put("timedOut", result.timedOut)
                         if (result.truncated) put("truncated", true)
+                        if (!fresh && shellSessionManager != null) {
+                            put("cwd", shellSessionManager.currentCwd(null))
+                        }
                     }.toString()
                 )
             )

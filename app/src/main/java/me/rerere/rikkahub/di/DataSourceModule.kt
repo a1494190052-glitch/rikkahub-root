@@ -185,6 +185,7 @@ val dataSourceModule = module {
             providerManager = get(),
             scheduledTaskDao = get(),
             conversationRepo = get(),
+            auditLogger = get(),
         )
     }
 

@@ -111,10 +111,24 @@ class RikkaHubApp : Application() {
         // 定时任务: 启动时重排（闹钟不持久化，可能被系统清除）
         rescheduleScheduledTasks()
 
+        // 持久 shell 会话: 定期回收空闲会话(防 su/proot 进程泄漏)
+        startShellSessionReaper()
+
         // Increment launch count
         incrementLaunchCount()
 
         // Composer.setDiagnosticStackTraceMode(ComposeStackTraceMode.Auto)
+    }
+
+    private fun startShellSessionReaper() {
+        get<AppScope>().launch(Dispatchers.IO) {
+            while (true) {
+                kotlinx.coroutines.delay(5 * 60 * 1000L)
+                runCatching {
+                    get<me.rerere.workspace.ShellSessionManager>().reapIdleSessions()
+                }
+            }
+        }
     }
 
     private fun rescheduleScheduledTasks() {

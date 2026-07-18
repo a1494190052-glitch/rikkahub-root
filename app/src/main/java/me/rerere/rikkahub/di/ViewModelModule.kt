@@ -14,6 +14,7 @@ import me.rerere.rikkahub.ui.pages.imggen.ImgGenVM
 import me.rerere.rikkahub.ui.pages.extensions.PromptVM
 import me.rerere.rikkahub.ui.pages.extensions.QuickMessagesVM
 import me.rerere.rikkahub.ui.pages.extensions.ScheduledTasksVM
+import me.rerere.rikkahub.ui.pages.extensions.ShellAuditVM
 import me.rerere.rikkahub.ui.pages.extensions.skills.SkillDetailVM
 import me.rerere.rikkahub.ui.pages.extensions.skills.SkillsVM
 import me.rerere.rikkahub.ui.pages.extensions.workspace.WorkspaceDetailVM
@@ -66,6 +67,7 @@ val viewModelModule = module {
     viewModelOf(::PromptVM)
     viewModelOf(::QuickMessagesVM)
     viewModelOf(::ScheduledTasksVM)
+    viewModelOf(::ShellAuditVM)
     viewModelOf(::SkillsVM)
     viewModelOf(::SkillDetailVM)
     viewModelOf(::WorkspaceVM)

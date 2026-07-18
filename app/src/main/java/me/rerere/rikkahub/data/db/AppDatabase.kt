@@ -14,6 +14,7 @@ import me.rerere.rikkahub.data.db.dao.ManagedFileDAO
 import me.rerere.rikkahub.data.db.dao.MemoryDAO
 import me.rerere.rikkahub.data.db.dao.MessageNodeDAO
 import me.rerere.rikkahub.data.db.dao.ScheduledTaskDAO
+import me.rerere.rikkahub.data.db.dao.ShellAuditDAO
 import me.rerere.rikkahub.data.db.dao.WorkspaceDAO
 import me.rerere.rikkahub.data.db.entity.ConversationEntity
 import me.rerere.rikkahub.data.db.entity.FavoriteEntity
@@ -23,6 +24,7 @@ import me.rerere.rikkahub.data.db.entity.ManagedFileEntity
 import me.rerere.rikkahub.data.db.entity.MemoryEntity
 import me.rerere.rikkahub.data.db.entity.MessageNodeEntity
 import me.rerere.rikkahub.data.db.entity.ScheduledTaskEntity
+import me.rerere.rikkahub.data.db.entity.ShellAuditEntity
 import me.rerere.rikkahub.data.db.entity.WorkspaceEntity
 import me.rerere.rikkahub.data.db.migrations.Migration_16_17
 import me.rerere.rikkahub.data.db.migrations.Migration_22_23
@@ -40,8 +42,9 @@ import me.rerere.rikkahub.utils.JsonInstant
         WorkspaceEntity::class,
         FolderEntity::class,
         ScheduledTaskEntity::class,
+        ShellAuditEntity::class,
     ],
-    version = 25,
+    version = 26,
     autoMigrations = [
         AutoMigration(from = 1, to = 2),
         AutoMigration(from = 2, to = 3),
@@ -62,6 +65,7 @@ import me.rerere.rikkahub.utils.JsonInstant
         AutoMigration(from = 22, to = 23, spec = Migration_22_23::class),
         AutoMigration(from = 23, to = 24),
         AutoMigration(from = 24, to = 25),
+        AutoMigration(from = 25, to = 26),
     ]
 )
 @TypeConverters(TokenUsageConverter::class)
@@ -83,6 +87,8 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun folderDao(): FolderDAO
 
     abstract fun scheduledTaskDao(): ScheduledTaskDAO
+
+    abstract fun shellAuditDao(): ShellAuditDAO
 }
 
 object TokenUsageConverter {

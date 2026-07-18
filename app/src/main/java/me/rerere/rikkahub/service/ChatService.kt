@@ -153,6 +153,9 @@ class ChatService(
     private val skillManager: SkillManager,
     private val workspaceRepository: WorkspaceRepository,
     private val folderRepository: FolderRepository,
+    private val shellSessionManager: me.rerere.workspace.ShellSessionManager,
+    private val backgroundShellManager: me.rerere.rikkahub.service.shell.BackgroundShellManager,
+    private val shellAuditLogger: me.rerere.rikkahub.service.shell.ShellAuditLogger,
 ) {
     // workspace 系统提示注入 (依赖 workspaceRepository, 故在类内构造)
     private val workspaceReminderTransformer = WorkspaceReminderTransformer(workspaceRepository)
@@ -662,7 +665,14 @@ class ChatService(
             )
             return emptyList()
         }
-        return createWorkspaceTools(workspaceId, workspaceRepository, cwd)
+        return createWorkspaceTools(
+            workspaceId = workspaceId,
+            workspaceRepository = workspaceRepository,
+            cwd = cwd,
+            shellSessionManager = shellSessionManager,
+            backgroundShellManager = backgroundShellManager,
+            shellAuditLogger = shellAuditLogger,
+        )
     }
 
     // ---- 检查无效消息 ----

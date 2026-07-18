@@ -61,7 +61,12 @@ internal fun buildCreateScheduleTool(repo: ScheduledTaskRepository, assistant: A
         InputSchema.Obj(
             properties = buildJsonObject {
                 put("title", buildJsonObject { put("type", "string"); put("description", "Short task name, e.g. '早安播报'") })
-                put("prompt", buildJsonObject { put("type", "string"); put("description", "The instruction to run at trigger time, written as a user message to you") })
+                put("prompt", buildJsonObject { put("type", "string"); put("description", "The instruction to run at trigger time. For action_type=SHELL this is the shell command (runs as root).") })
+                put("action_type", buildJsonObject {
+                    put("type", "string")
+                    put("enum", JsonArray(listOf("LLM", "SHELL").map { JsonPrimitive(it) }))
+                    put("description", "LLM (default): prompt is sent to you as a user message; SHELL: prompt is executed as a root shell command and its output is posted")
+                })
                 put("type", buildJsonObject {
                     put("type", "string")
                     put("enum", JsonArray(listOf("ONCE", "DAILY", "WEEKLY", "INTERVAL").map { JsonPrimitive(it) }))
@@ -105,6 +110,10 @@ internal fun buildCreateScheduleTool(repo: ScheduledTaskRepository, assistant: A
         }
         if (err != null) return@Tool listOf(UIMessagePart.Text("错误: $err"))
 
+        val actionType = obj["action_type"]?.jsonPrimitive?.contentOrNull?.uppercase()
+            ?.takeIf { it == ScheduledTaskEntity.ACTION_SHELL }
+            ?: ScheduledTaskEntity.ACTION_LLM
+
         val task = ScheduledTaskEntity(
             id = Uuid.random().toString(),
             assistantId = assistant.id.toString(),
@@ -115,6 +124,7 @@ internal fun buildCreateScheduleTool(repo: ScheduledTaskRepository, assistant: A
             weekDays = obj["weekdays"]?.jsonPrimitive?.contentOrNull ?: "",
             intervalMinutes = interval ?: 60,
             startAt = startAt ?: 0,
+            actionType = actionType,
         )
         repo.upsert(task)
         listOf(UIMessagePart.Text("定时任务已创建：\n" + formatTask(task)))

@@ -21,6 +21,7 @@ data class ScheduledTaskEntity(
     @ColumnInfo(name = "start_at") val startAt: Long = 0,             // ONCE: 触发时间戳
     @ColumnInfo(name = "enabled") val enabled: Boolean = true,
     @ColumnInfo(name = "conversation_id") val conversationId: String? = null, // 结果落到的会话(空=自动创建)
+    @ColumnInfo(name = "action_type", defaultValue = ACTION_LLM) val actionType: String = ACTION_LLM, // LLM: prompt 发给模型 / SHELL: prompt 作为 root shell 命令执行
     @ColumnInfo(name = "last_run_at") val lastRunAt: Long = 0,
     @ColumnInfo(name = "created_at") val createdAt: Long = System.currentTimeMillis(),
 ) {
@@ -29,5 +30,8 @@ data class ScheduledTaskEntity(
         const val TYPE_DAILY = "DAILY"
         const val TYPE_WEEKLY = "WEEKLY"
         const val TYPE_INTERVAL = "INTERVAL"
+
+        const val ACTION_LLM = "LLM"
+        const val ACTION_SHELL = "SHELL"
     }
 }

@@ -87,6 +87,12 @@ fun ExtensionsPage() {
                         headlineContent = { Text(stringResource(R.string.extensions_page_scheduled_tasks)) },
                         supportingContent = { Text(stringResource(R.string.extensions_page_scheduled_tasks_desc)) },
                     )
+                    item(
+                        onClick = { navController.navigate(Screen.ShellAudit) },
+                        leadingContent = { Icon(HugeIcons.File02, null) },
+                        headlineContent = { Text(stringResource(R.string.extensions_page_shell_audit)) },
+                        supportingContent = { Text(stringResource(R.string.extensions_page_shell_audit_desc)) },
+                    )
                 }
             }
         }

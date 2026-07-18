@@ -44,18 +44,39 @@ class ProotShellRunner(
 
         context.tempDir.mkdirs()
         patcher.patch(context.linuxDir)
-        val process = ProcessBuilder(buildCommand(context, proot))
-            .directory(context.filesDir)
+        val process = buildProcess(context, proot, loader)
             .redirectErrorStream(false)
+            .start()
+
+        return process.readResult(context.timeoutMillis, context.stdin)
+    }
+
+    /**
+     * 构建 proot 进程(未启动), 供一次性执行/后台任务复用.
+     * 返回 null 表示 rootfs 或 proot 二进制不可用.
+     */
+    fun buildProcessBuilderOrNull(context: WorkspaceShellContext): ProcessBuilder? {
+        if (!context.linuxDir.hasUsableRootfs()) return null
+        val proot = File(nativeLibraryDir, PROOT_EXEC)
+        val loader = File(nativeLibraryDir, PROOT_LOADER)
+        if (!proot.isFile || !loader.isFile) return null
+        context.tempDir.mkdirs()
+        patcher.patch(context.linuxDir)
+        return buildProcess(context, proot, loader)
+    }
+
+    private fun buildProcess(
+        context: WorkspaceShellContext,
+        proot: File,
+        loader: File,
+    ): ProcessBuilder =
+        ProcessBuilder(buildCommand(context, proot))
+            .directory(context.filesDir)
             .apply {
                 environment()["PROOT_LOADER"] = loader.absolutePath
                 environment()["PROOT_TMP_DIR"] = context.tempDir.absolutePath
                 environment()["TMPDIR"] = context.tempDir.absolutePath
             }
-            .start()
-
-        return process.readResult(context.timeoutMillis, context.stdin)
-    }
 
     private fun buildCommand(
         context: WorkspaceShellContext,

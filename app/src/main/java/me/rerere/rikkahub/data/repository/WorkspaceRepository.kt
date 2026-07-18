@@ -270,10 +270,45 @@ class WorkspaceRepository(
         }
     }
 
+    // ---- 快照(纯文件备份, 不依赖 git) ----
+
+    private val snapshotManager by lazy { me.rerere.workspace.SnapshotManager() }
+
+    suspend fun createSnapshot(id: String, label: String?): me.rerere.workspace.WorkspaceSnapshot =
+        withContext(Dispatchers.IO) {
+            val workspace = dao.getById(id) ?: error("Workspace not found: $id")
+            snapshotManager.create(manager.workspaceDir(workspace.root), label)
+        }
+
+    suspend fun listSnapshots(id: String): List<me.rerere.workspace.WorkspaceSnapshot> =
+        withContext(Dispatchers.IO) {
+            val workspace = dao.getById(id) ?: error("Workspace not found: $id")
+            snapshotManager.list(manager.workspaceDir(workspace.root))
+        }
+
+    /** 恢复快照(恢复前自动打 pre-restore 保险快照) */
+    suspend fun restoreSnapshot(id: String, name: String): me.rerere.workspace.WorkspaceSnapshot =
+        withContext(Dispatchers.IO) {
+            val workspace = dao.getById(id) ?: error("Workspace not found: $id")
+            snapshotManager.restore(manager.workspaceDir(workspace.root), name)
+        }
+
+    suspend fun deleteSnapshot(id: String, name: String): Boolean =
+        withContext(Dispatchers.IO) {
+            val workspace = dao.getById(id) ?: error("Workspace not found: $id")
+            snapshotManager.delete(manager.workspaceDir(workspace.root), name)
+        }
+
     suspend fun delete(id: String): Boolean {
         val workspace = dao.getById(id) ?: return false
         dao.deleteById(id)
         withContext(Dispatchers.IO) {
+            // 先关掉该工作区的持久 shell 会话, 避免进程残留指向已删目录
+            runCatching {
+                org.koin.java.KoinJavaComponent.getKoin()
+                    .get<me.rerere.workspace.ShellSessionManager>()
+                    .close(workspace.root)
+            }
             manager.deleteWorkspace(workspace.root)
         }
         cleanupAssistantReferences(id)

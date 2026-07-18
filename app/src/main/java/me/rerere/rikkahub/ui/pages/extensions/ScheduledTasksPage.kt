@@ -175,6 +175,7 @@ private fun CreateScheduledTaskDialog(
     var title by remember { mutableStateOf("") }
     var prompt by remember { mutableStateOf("") }
     var type by remember { mutableStateOf(ScheduledTaskEntity.TYPE_DAILY) }
+    var actionType by remember { mutableStateOf(ScheduledTaskEntity.ACTION_LLM) }
     var time by remember { mutableStateOf("08:00") }
     var weekdays by remember { mutableStateOf("1,2,3,4,5") }
     var interval by remember { mutableStateOf("60") }
@@ -200,9 +201,32 @@ private fun CreateScheduledTaskDialog(
                     label = { Text(stringResource(R.string.scheduled_tasks_field_title)) },
                     singleLine = true, modifier = Modifier.fillMaxWidth(),
                 )
+                // 动作类型: LLM 提示词 / Shell 命令
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    listOf(
+                        ScheduledTaskEntity.ACTION_LLM to R.string.scheduled_tasks_action_llm,
+                        ScheduledTaskEntity.ACTION_SHELL to R.string.scheduled_tasks_action_shell,
+                    ).forEach { (a, label) ->
+                        FilterChip(
+                            selected = actionType == a,
+                            onClick = { actionType = a },
+                            label = { Text(stringResource(label)) },
+                        )
+                    }
+                }
                 OutlinedTextField(
                     value = prompt, onValueChange = { prompt = it },
-                    label = { Text(stringResource(R.string.scheduled_tasks_field_prompt)) },
+                    label = {
+                        Text(
+                            stringResource(
+                                if (actionType == ScheduledTaskEntity.ACTION_SHELL) {
+                                    R.string.scheduled_tasks_field_shell_command
+                                } else {
+                                    R.string.scheduled_tasks_field_prompt
+                                }
+                            )
+                        )
+                    },
                     minLines = 2, modifier = Modifier.fillMaxWidth(),
                 )
                 // 助手选择
@@ -280,6 +304,7 @@ private fun CreateScheduledTaskDialog(
                             timeMinutes = h * 60 + m,
                             weekDays = weekdays.trim(),
                             intervalMinutes = interval.toIntOrNull() ?: 60,
+                            actionType = actionType,
                         )
                     )
                 },

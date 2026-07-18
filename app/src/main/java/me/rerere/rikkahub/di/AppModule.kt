@@ -31,7 +31,68 @@ val appModule = module {
     }
 
     single {
-        LocalTools(get(), get(), get(), get())
+        LocalTools(get(), get(), get(), get(), get(), get())
+    }
+
+    // 持久 Shell 会话注册表(workspace/root 复用, 空闲自动回收)
+    single {
+        val context: android.content.Context = get()
+        me.rerere.workspace.ShellSessionManager(
+            baseDir = java.io.File(context.filesDir, "workspaces"),
+            nativeLibraryDir = java.io.File(context.applicationInfo.nativeLibraryDir),
+            extraBindMounts = listOf(
+                me.rerere.workspace.WorkspaceBindMount(
+                    source = java.io.File(context.filesDir, me.rerere.rikkahub.data.files.FileFolders.SKILLS).apply { mkdirs() },
+                    target = "/skills",
+                ),
+                me.rerere.workspace.WorkspaceBindMount(
+                    source = java.io.File(context.filesDir, me.rerere.rikkahub.data.files.FileFolders.TOOL_OUTPUTS).apply { mkdirs() },
+                    target = "/tool_outputs",
+                ),
+                me.rerere.workspace.WorkspaceBindMount(
+                    source = java.io.File(context.filesDir, me.rerere.rikkahub.data.files.FileFolders.UPLOAD).apply { mkdirs() },
+                    target = "/upload",
+                ),
+            ),
+            rootModeProvider = {
+                get<me.rerere.rikkahub.data.datastore.SettingsStore>().settingsFlow.value.workspaceRootMode
+            },
+        )
+    }
+
+    // Shell 审计日志
+    single {
+        me.rerere.rikkahub.service.shell.ShellAuditLogger(get<me.rerere.rikkahub.data.db.AppDatabase>().shellAuditDao())
+    }
+
+    // 后台 Shell 任务管理器
+    single {
+        val context: android.content.Context = get()
+        me.rerere.rikkahub.service.shell.BackgroundShellManager(
+            filesDir = context.filesDir,
+            workspacesDir = java.io.File(context.filesDir, "workspaces"),
+            prootRunner = me.rerere.workspace.ProotShellRunner(
+                nativeLibraryDir = java.io.File(context.applicationInfo.nativeLibraryDir),
+                extraBindMounts = listOf(
+                    me.rerere.workspace.WorkspaceBindMount(
+                        source = java.io.File(context.filesDir, me.rerere.rikkahub.data.files.FileFolders.SKILLS).apply { mkdirs() },
+                        target = "/skills",
+                    ),
+                    me.rerere.workspace.WorkspaceBindMount(
+                        source = java.io.File(context.filesDir, me.rerere.rikkahub.data.files.FileFolders.TOOL_OUTPUTS).apply { mkdirs() },
+                        target = "/tool_outputs",
+                    ),
+                    me.rerere.workspace.WorkspaceBindMount(
+                        source = java.io.File(context.filesDir, me.rerere.rikkahub.data.files.FileFolders.UPLOAD).apply { mkdirs() },
+                        target = "/upload",
+                    ),
+                ),
+            ),
+            rootModeProvider = {
+                get<me.rerere.rikkahub.data.datastore.SettingsStore>().settingsFlow.value.workspaceRootMode
+            },
+            auditLogger = get(),
+        )
     }
 
     single {
@@ -91,7 +152,10 @@ val appModule = module {
             filesManager = get(),
             skillManager = get(),
             workspaceRepository = get(),
-            folderRepository = get()
+            folderRepository = get(),
+            shellSessionManager = get(),
+            backgroundShellManager = get(),
+            shellAuditLogger = get()
         )
     }
 

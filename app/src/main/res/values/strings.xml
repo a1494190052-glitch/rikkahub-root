@@ -1325,4 +1325,17 @@
   <string name="notification_channel_scheduled_task">Scheduled Messages</string>
   <string name="assistant_page_local_tools_scheduler_title">Scheduled Tasks (Proactive)</string>
   <string name="assistant_page_local_tools_scheduler_desc">Let the AI create scheduled tasks (create_schedule / list / delete / toggle) and proactively message you at the scheduled time, posted to a conversation with a notification</string>
+  <string name="scheduled_tasks_action_llm">AI Message</string>
+  <string name="scheduled_tasks_action_shell">Shell Command</string>
+  <string name="scheduled_tasks_field_shell_command">Shell command (runs as root)</string>
+  <string name="shell_audit_page_title">Shell Log</string>
+  <string name="shell_audit_empty">No shell commands recorded yet. Commands run by the AI (workspace/root/background) will appear here.</string>
+  <string name="shell_audit_clear">Clear all</string>
+  <string name="shell_audit_kill">Kill</string>
+  <string name="shell_audit_source_workspace">Workspace</string>
+  <string name="shell_audit_source_root">Root</string>
+  <string name="shell_audit_source_background">Background</string>
+  <string name="shell_audit_source_scheduled">Scheduled</string>
+  <string name="extensions_page_shell_audit">Shell Log</string>
+  <string name="extensions_page_shell_audit_desc">Audit every shell command the AI runs on your device</string>
 </resources>

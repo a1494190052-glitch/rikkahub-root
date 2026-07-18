@@ -11,6 +11,8 @@ class LocalTools(
     private val eventBus: AppEventBus,
     private val ttsManager: TTSManager,
     private val settingsStore: SettingsStore,
+    private val shellSessionManager: me.rerere.workspace.ShellSessionManager? = null,
+    private val shellAuditLogger: me.rerere.rikkahub.service.shell.ShellAuditLogger? = null,
 ) {
     val javascriptTool by lazy { buildJavascriptTool() }
 
@@ -28,7 +30,7 @@ class LocalTools(
 
     val calendarCreateTool by lazy { buildCalendarCreateTool(context) }
 
-    val rootShellTool by lazy { buildRootShellTool() }
+    val rootShellTool by lazy { buildRootShellTool(shellSessionManager, shellAuditLogger) }
 
     val rootScreenshotTool by lazy { buildRootScreenshotTool(context) }
 

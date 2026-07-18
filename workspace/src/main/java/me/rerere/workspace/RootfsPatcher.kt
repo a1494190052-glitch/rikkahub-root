@@ -17,6 +17,32 @@ class RootfsPatcher {
         ensureLocale(etcDir, options.locale)
         ensureGroupNames(etcDir, options.groupIds.ifEmpty { currentSupplementaryGroupIds() })
         ensureTempDirs(linuxDir)
+        options.aptMirror?.let { mirror -> ensureAptMirror(linuxDir, mirror) }
+    }
+
+    /**
+     * 将 apt 软件源替换为国内镜像(默认清华 TUNA), 加速容器内 apt update/install.
+     * 同时处理传统 sources.list 与 deb822 格式 (ubuntu 24.04+ 的 *.sources).
+     * 幂等: 已指向镜像或无 apt 源文件时不改动.
+     */
+    private fun ensureAptMirror(linuxDir: File, mirror: String) {
+        val etcApt = File(linuxDir, "etc/apt")
+        if (!etcApt.isDirectory) return
+        val candidates = mutableListOf<File>()
+        File(etcApt, "sources.list").takeIf { it.isFile }?.let { candidates += it }
+        File(etcApt, "sources.list.d").listFiles()?.forEach { f ->
+            if (f.isFile && (f.extension == "list" || f.extension == "sources")) candidates += f
+        }
+        for (file in candidates) {
+            runCatching {
+                val original = file.readText()
+                var patched = original
+                OFFICIAL_APT_HOSTS.forEach { host -> patched = patched.replace(host, mirror) }
+                if (patched != original) {
+                    file.writeText(patched)
+                }
+            }
+        }
     }
 
     private fun ensureRootfsDns(
@@ -165,7 +191,19 @@ class RootfsPatcher {
             .mapNotNull { it.toLongOrNull() }
     }
 
-    private companion object {
+    companion object {
+        const val DEFAULT_APT_MIRROR = "mirrors.tuna.tsinghua.edu.cn"
+
+        /** 需要被镜像替换的官方 apt 源域名 */
+        private val OFFICIAL_APT_HOSTS = listOf(
+            "archive.ubuntu.com",
+            "security.ubuntu.com",
+            "ports.ubuntu.com",
+            "deb.debian.org",
+            "security.debian.org",
+            "ftp.debian.org",
+        )
+
         private const val MAX_DNS_SERVERS = 3
         private const val DEFAULT_HOSTNAME = "localhost"
         private val WHITESPACE_REGEX = Regex("\\s+")
@@ -187,4 +225,6 @@ data class RootfsPatchOptions(
     val hostname: String = "localhost",
     val locale: String = "C.UTF-8",
     val groupIds: List<Long> = emptyList(),
+    /** apt 镜像域名(如 mirrors.tuna.tsinghua.edu.cn); null 表示不替换官方源 */
+    val aptMirror: String? = RootfsPatcher.DEFAULT_APT_MIRROR,
 )
