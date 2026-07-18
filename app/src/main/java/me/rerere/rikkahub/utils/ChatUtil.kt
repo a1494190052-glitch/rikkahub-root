@@ -41,7 +41,16 @@ private val ALLOWED_MIME_TYPES = setOf(
     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     "application/vnd.ms-powerpoint",
     "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-    "application/epub+zip"
+    "application/epub+zip",
+    // archives & packages
+    "application/zip", "application/x-zip-compressed",
+    "application/vnd.android.package-archive",
+    "application/x-tar", "application/gzip", "application/x-bzip2",
+    "application/x-xz", "application/x-7z-compressed", "application/x-rar-compressed",
+    "application/vnd.debian.binary-package",
+    // other
+    "image/svg+xml",
+    "application/x-ipynb+json",
 )
 
 private val ALLOWED_FILE_EXTENSIONS = setOf(
@@ -53,7 +62,13 @@ private val ALLOWED_FILE_EXTENSIONS = setOf(
     "c", "h", "cpp", "cc", "cxx", "hpp", "hh", "hxx",
     "rs", "cs", "markdown", "mdx",
     "toml", "ini", "env", "gradle", "kts", "properties",
-    "proto", "graphql", "gql", "yml", "yaml"
+    "proto", "graphql", "gql", "yml", "yaml",
+    // archives & packages
+    "zip", "apk", "tar", "gz", "bz2", "xz", "7z", "rar", "deb", "rpm",
+    // other common text/config formats
+    "log", "diff", "patch", "cfg", "conf", "lock", "cmake", "makefile",
+    "tex", "rst", "ipynb", "svg", "dockerfile", "editorconfig",
+    "gitignore", "gitattributes",
 )
 
 fun isAllowedFileType(fileName: String, mime: String): Boolean {
