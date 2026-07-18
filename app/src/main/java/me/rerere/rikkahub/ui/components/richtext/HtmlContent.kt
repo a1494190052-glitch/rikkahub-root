@@ -21,6 +21,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import me.rerere.rikkahub.utils.toCssHex
+import java.io.File
 
 /**
  * 检测文本是否包含 HTML 结构标签 (ST 风格角色卡消息)
@@ -219,24 +220,36 @@ fun HtmlMessageContent(
             // 内容未变化时不重复加载, 避免闪烁
             if (webView.tag != htmlDoc.hashCode()) {
                 webView.tag = htmlDoc.hashCode()
-                // 必须 base64 编码加载: 原始 HTML 中的 # % 等字符会导致
-                // loadDataWithBaseURL 解析异常/截断 (Android 经典坑)
-                val encoded = android.util.Base64.encodeToString(
-                    htmlDoc.toByteArray(Charsets.UTF_8),
-                    android.util.Base64.NO_WRAP
-                )
-                webView.loadDataWithBaseURL(
-                    "https://rikkahub.local/",
-                    encoded,
-                    "text/html",
-                    "base64",
-                    null
-                )
+                // 写缓存文件用 file:// 加载 — loadData 系列 API 对含 #/% 的
+                // 大体积 HTML 没有可靠的字符串传参路径 (截断/base64 不解码),
+                // 文件加载无转义问题, script/localStorage 均正常
+                webView.loadUrl("file://${writeHtmlCache(context, htmlDoc).absolutePath}")
             }
         },
         onRelease = { it.destroy() },
         // WebView 高度由 JS 回传驱动
     )
+}
+
+/**
+ * 把 HTML 文档写入缓存目录, 返回文件 (内容相同则复用)
+ *
+ * 附带简单 LRU: 超过 [MAX_CACHE_FILES] 个文件时删除最旧的
+ */
+private const val MAX_CACHE_FILES = 50
+
+private fun writeHtmlCache(context: android.content.Context, htmlDoc: String): File {
+    val dir = File(context.cacheDir, "html_messages").apply { mkdirs() }
+    val file = File(dir, "msg_" + htmlDoc.hashCode().toString(16) + ".html")
+    if (!file.exists()) {
+        file.writeText(htmlDoc, Charsets.UTF_8)
+        // LRU 清理
+        val files = dir.listFiles()?.sortedBy { it.lastModified() } ?: return file
+        if (files.size > MAX_CACHE_FILES) {
+            files.take(files.size - MAX_CACHE_FILES).forEach { it.delete() }
+        }
+    }
+    return file
 }
 
 /**
