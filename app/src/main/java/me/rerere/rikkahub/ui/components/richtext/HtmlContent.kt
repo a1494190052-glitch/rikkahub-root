@@ -28,10 +28,21 @@ import me.rerere.rikkahub.utils.toCssHex
  * 只匹配结构性标签, 避免普通 Markdown 内联 HTML (<br>/<b> 等) 误判
  */
 private val HTML_STRUCTURE_REGEX = Regex(
-    "(?i)</?(div|section|article|header|footer|nav|aside|main|style|table|thead|tbody|tfoot|tr|td|th|caption|button|audio|video|source|font|center|details|summary|marquee|iframe|object|embed|canvas|svg|form|input|select|textarea|fieldset|figure|figcaption|h[1-6])([\\s>/]|$)"
+    "(?i)</?(div|section|article|header|footer|nav|aside|main|style|table|thead|tbody|tfoot|tr|td|th|caption|button|audio|video|source|font|center|details|summary|marquee|iframe|object|embed|canvas|svg|form|input|select|textarea|fieldset|figure|figcaption|h[1-6]|html|head|body)([\\s>/]|$)"
 )
 
 fun containsHtmlMarkup(text: String): Boolean = HTML_STRUCTURE_REGEX.containsMatchIn(text)
+
+/**
+ * 剥离 ```html ... ``` 代码栅栏 (ST 正则脚本常用 ```html 包裹界面代码,
+ * ST 渲染时原样输出为 HTML)
+ */
+private val HTML_FENCE_REGEX = Regex("```html\\s*\n([\\s\\S]*?)```", RegexOption.IGNORE_CASE)
+
+fun unwrapHtmlFences(text: String): String {
+    if (!text.contains("```")) return text
+    return HTML_FENCE_REGEX.replace(text) { it.groupValues[1].trim() }
+}
 
 /**
  * ST 风格 HTML 消息渲染器
@@ -56,9 +67,9 @@ fun HtmlMessageContent(
     val colorScheme = MaterialTheme.colorScheme
     var contentHeightPx by remember { mutableIntStateOf(96) }
 
-    // 显示层占位符替换 (ST 渲染行为)
+    // 显示层占位符替换 + ```html 栅栏剥离 (ST 渲染行为)
     val processedContent = remember(content, charName, userName) {
-        content
+        unwrapHtmlFences(content)
             .replace("{{char}}", charName, ignoreCase = true)
             .replace("{{user}}", userName, ignoreCase = true)
     }

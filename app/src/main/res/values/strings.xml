@@ -42,6 +42,7 @@
   <string name="assistant_importer_lorebook_entries">Embedded lorebook: %1$d entries (will be imported)</string>
   <string name="assistant_importer_select_greeting">First message</string>
   <string name="assistant_importer_import_success">Character card imported</string>
+  <string name="assistant_importer_regex_scripts">ST regex scripts: %1$d (will be imported)</string>
   <string name="assistant_page_actions">Actions</string>
   <string name="assistant_page_add">Add</string>
   <string name="assistant_page_add_body">Add Body</string>

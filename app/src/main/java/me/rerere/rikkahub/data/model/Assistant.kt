@@ -94,6 +94,65 @@ private fun compileRegexCached(pattern: String): Regex? {
     return result.getOrNull()
 }
 
+/**
+ * 按 JavaScript replace 语义解析替换字符串 (SillyTavern 正则脚本兼容)
+ *
+ * - `$$` -> 字面 `$`
+ * - `$&` -> 整个匹配
+ * - `$1` .. `$99` -> 对应捕获组 (不存在则空串)
+ * - 其余 `$` 原样保留
+ */
+internal fun resolveJsReplacement(replacement: String, match: MatchResult): String {
+    val out = StringBuilder(replacement.length + 16)
+    var i = 0
+    while (i < replacement.length) {
+        val c = replacement[i]
+        if (c == '$' && i + 1 < replacement.length) {
+            when (val next = replacement[i + 1]) {
+                '$' -> {
+                    out.append('$')
+                    i += 2
+                }
+
+                '&' -> {
+                    out.append(match.value)
+                    i += 2
+                }
+
+                in '0'..'9' -> {
+                    // 最多两位数字组号
+                    var num = next - '0'
+                    var consumed = 2
+                    if (i + 2 < replacement.length && replacement[i + 2] in '0'..'9') {
+                        val twoDigit = num * 10 + (replacement[i + 2] - '0')
+                        if (twoDigit <= match.groupValues.size - 1) {
+                            num = twoDigit
+                            consumed = 3
+                        }
+                    }
+                    if (num in 1..match.groupValues.size - 1) {
+                        out.append(match.groupValues[num])
+                    }
+                    i += consumed
+                }
+
+                else -> {
+                    out.append(c)
+                    i += 1
+                }
+            }
+        } else if (c == '\\' && i + 1 < replacement.length && replacement[i + 1] == '$') {
+            // \$ -> 字面 $
+            out.append('$')
+            i += 2
+        } else {
+            out.append(c)
+            i += 1
+        }
+    }
+    return out.toString()
+}
+
 fun String.replaceRegexes(
     assistant: Assistant?,
     scope: AssistantAffectScope,
@@ -105,10 +164,11 @@ fun String.replaceRegexes(
         if (regex.enabled && regex.visualOnly == visual && regex.affectingScope.contains(scope)) {
             val compiled = compileRegexCached(regex.findRegex) ?: return@fold acc
             try {
-                acc.replace(
-                    regex = compiled,
-                    replacement = regex.replaceString,
-                )
+                // 使用 JS 语义的 replacement 解析 (兼容 SillyTavern 正则脚本):
+                // $$ -> 字面 $, $& -> 整个匹配, $1..$99 -> 捕获组, 其余 $ 原样保留
+                acc.replace(compiled) { match ->
+                    resolveJsReplacement(regex.replaceString, match)
+                }
             } catch (e: Exception) {
                 e.printStackTrace()
                 // 替换字符串可能引用不存在的分组，失败时返回原字符串

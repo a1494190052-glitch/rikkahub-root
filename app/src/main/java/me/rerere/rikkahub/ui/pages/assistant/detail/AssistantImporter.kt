@@ -238,6 +238,18 @@ private fun CharacterCardPreviewDialog(
                     )
                 }
 
+                // 正则脚本数
+                if (card.regexes.isNotEmpty()) {
+                    Text(
+                        stringResource(
+                            R.string.assistant_importer_regex_scripts,
+                            card.regexes.size
+                        ),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+
                 // 开场白选择
                 if (card.greetings.isNotEmpty()) {
                     Text(

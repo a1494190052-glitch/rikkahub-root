@@ -13,6 +13,8 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import me.rerere.ai.core.MessageRole
 import me.rerere.rikkahub.data.model.Assistant
+import me.rerere.rikkahub.data.model.AssistantAffectScope
+import me.rerere.rikkahub.data.model.AssistantRegex
 import me.rerere.rikkahub.data.model.InjectionPosition
 import me.rerere.rikkahub.data.model.Lorebook
 import me.rerere.rikkahub.data.model.PromptInjection
@@ -45,6 +47,12 @@ data class CharacterCard(
     val characterVersion: String = "",
     val tags: List<String> = emptyList(),
     val lorebookEntries: List<PromptInjection.RegexInjection> = emptyList(),
+    /** ST 正则脚本 (extensions.regex_scripts), 已映射为原生 AssistantRegex */
+    val regexes: List<AssistantRegex> = emptyList(),
+    /** ST 作者注释 (extensions.depth_prompt) */
+    val depthPrompt: String = "",
+    val depthPromptDepth: Int = 4,
+    val depthPromptRole: MessageRole = MessageRole.SYSTEM,
 ) {
     /** 所有开场白 (first_mes + alternate_greetings) */
     val greetings: List<String>
@@ -103,6 +111,7 @@ data class CharacterCard(
             } ?: emptyList(),
             background = background,
             lorebookIds = lorebookIds,
+            regexes = regexes.map { it.copy(id = Uuid.random()) },
         )
     }
 
@@ -115,6 +124,23 @@ data class CharacterCard(
     fun toLorebook(): Lorebook? {
         val entries = buildList {
             addAll(lorebookEntries.map { it.copy(id = Uuid.random()) })
+            // depth_prompt (作者注释) -> @Depth 注入
+            if (depthPrompt.isNotBlank()) {
+                add(
+                    PromptInjection.RegexInjection(
+                        id = Uuid.random(),
+                        name = "Author's Note (Depth Prompt)",
+                        enabled = true,
+                        priority = 90,
+                        position = InjectionPosition.AT_DEPTH,
+                        content = depthPrompt.trim(),
+                        injectDepth = depthPromptDepth,
+                        role = depthPromptRole,
+                        keywords = emptyList(),
+                        constantActive = true,
+                    )
+                )
+            }
             if (postHistoryInstructions.isNotBlank()) {
                 add(
                     PromptInjection.RegexInjection(
@@ -201,8 +227,113 @@ object CharacterCardParser {
             characterVersion = str("character_version").orEmpty(),
             tags = strList("tags"),
             lorebookEntries = parseCharacterBook(this["character_book"]),
+            regexes = parseRegexScripts(this["extensions"]),
+            depthPrompt = parseDepthPrompt(this["extensions"])?.first ?: "",
+            depthPromptDepth = parseDepthPrompt(this["extensions"])?.second ?: 4,
+            depthPromptRole = parseDepthPrompt(this["extensions"])?.third ?: MessageRole.SYSTEM,
         )
     }
+
+    // region extensions (regex_scripts / depth_prompt)
+
+    private fun parseDepthPrompt(extensions: JsonElement?): Triple<String, Int, MessageRole>? {
+        val ext = extensions as? JsonObject ?: return null
+        val dp = ext["depth_prompt"] as? JsonObject ?: return null
+        val prompt = dp.str("prompt") ?: return null
+        if (prompt.isBlank()) return null
+        val role = when (dp.str("role")?.lowercase()) {
+            "user" -> MessageRole.USER
+            "assistant" -> MessageRole.ASSISTANT
+            else -> MessageRole.SYSTEM
+        }
+        return Triple(prompt, dp.int("depth") ?: 4, role)
+    }
+
+    /**
+     * 解析 ST 正则脚本 (extensions.regex_scripts) 并映射为原生 AssistantRegex
+     *
+     * 映射规则:
+     * - placement: 1 -> USER scope, 2 -> ASSISTANT scope (空 = 两者)
+     * - markdownOnly/displayOnly = true -> visualOnly = true (仅显示层)
+     * - promptOnly = true -> visualOnly = false (仅发送层)
+     * - 两者都 false -> 生成显示 + 发送两条 (ST 语义为两侧都应用)
+     * - findRegex: JS 字面量 /pattern/flags -> Kotlin 内联 flag 前缀
+     * - minDepth/maxDepth: RikkaHub 正则无消息深度概念, 忽略
+     */
+    private fun parseRegexScripts(extensions: JsonElement?): List<AssistantRegex> {
+        val ext = extensions as? JsonObject ?: return emptyList()
+        val scripts = ext["regex_scripts"] as? JsonArray ?: return emptyList()
+        return scripts.mapNotNull { element ->
+            val script = element as? JsonObject ?: return@mapNotNull null
+            val rawFind = script.str("findRegex") ?: return@mapNotNull null
+            if (rawFind.isBlank()) return@mapNotNull null
+            val findRegex = convertJsRegex(rawFind)
+            // 编译验证, 跳过不兼容的脚本
+            runCatching { Regex(findRegex) }.getOrNull() ?: return@mapNotNull null
+
+            val replaceString = script.str("replaceString").orEmpty()
+            val name = script.str("scriptName").orEmpty().ifEmpty { "ST Script" }
+            val enabled = !(script.bool("disabled") ?: false)
+
+            val placements = script["placement"]?.let { el ->
+                runCatching { el.jsonArray.mapNotNull { it.jsonPrimitive.intOrNull } }.getOrNull()
+            } ?: emptyList()
+            val scopes = buildSet {
+                if (placements.isEmpty() || 1 in placements) add(AssistantAffectScope.USER)
+                if (placements.isEmpty() || 2 in placements) add(AssistantAffectScope.ASSISTANT)
+            }
+            if (scopes.isEmpty()) return@mapNotNull null
+
+            val visualOnly = (script.bool("markdownOnly") ?: false) || (script.bool("displayOnly") ?: false)
+            val promptOnly = script.bool("promptOnly") ?: false
+
+            val base = AssistantRegex(
+                id = Uuid.random(),
+                name = name,
+                enabled = enabled,
+                findRegex = findRegex,
+                replaceString = replaceString,
+                affectingScope = scopes,
+            )
+            when {
+                visualOnly -> listOf(base.copy(visualOnly = true))
+                promptOnly -> listOf(base.copy(visualOnly = false))
+                else -> listOf(
+                    base.copy(id = Uuid.random(), visualOnly = true),
+                    base.copy(visualOnly = false),
+                )
+            }
+        }.flatten()
+    }
+
+    /**
+     * JS 正则字面量转 Kotlin 正则
+     *
+     * - /pattern/flags 形式提取 flags, 转为内联 (?i)(?s)(?m) 前缀
+     * - 裸模式直接使用
+     * - JS 转义 \/ 还原为 /
+     */
+    internal fun convertJsRegex(jsRegex: String): String {
+        var pattern = jsRegex.trim()
+        var flags = ""
+        if (pattern.length > 2 && pattern.startsWith("/")) {
+            val lastSlash = pattern.lastIndexOf('/')
+            val tail = pattern.substring(lastSlash + 1)
+            if (lastSlash > 0 && tail.all { it in "dgimsuvy" }) {
+                flags = tail
+                pattern = pattern.substring(1, lastSlash)
+            }
+        }
+        pattern = pattern.replace("\\/", "/")
+        val prefix = buildString {
+            if ('i' in flags) append("(?i)")
+            if ('s' in flags) append("(?s)")
+            if ('m' in flags) append("(?m)")
+        }
+        return prefix + pattern
+    }
+
+    // endregion
 
     // region character_book
 

@@ -42,6 +42,7 @@
   <string name="assistant_importer_lorebook_entries">内嵌世界书：%1$d 个条目（将一并导入）</string>
   <string name="assistant_importer_select_greeting">开场白</string>
   <string name="assistant_importer_import_success">角色卡导入成功</string>
+  <string name="assistant_importer_regex_scripts">ST 正则脚本：%1$d 个（将一并导入）</string>
   <string name="assistant_page_actions">操作</string>
   <string name="assistant_page_add">添加</string>
   <string name="assistant_page_add_body">添加 Body</string>
