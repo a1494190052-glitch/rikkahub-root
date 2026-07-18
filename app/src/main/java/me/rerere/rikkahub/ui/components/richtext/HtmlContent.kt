@@ -114,7 +114,7 @@ fun HtmlMessageContent(
     AndroidView(
         modifier = modifier.height(heightDp),
         factory = { ctx ->
-            WebView(ctx).apply {
+            TouchRelayWebView(ctx).apply {
                 setBackgroundColor(AndroidColor.TRANSPARENT)
                 settings.apply {
                     javaScriptEnabled = true
@@ -146,6 +146,13 @@ fun HtmlMessageContent(
                     }
                 }, "AndroidHeight")
                 addJavascriptInterface(tavBridge, "AndroidTavBridge")
+                // 滚动内容探测桥: JS 报告页面有无可滚内容, 决定手势归属
+                addJavascriptInterface(object {
+                    @JavascriptInterface
+                    fun setConsumable(consumable: Boolean) {
+                        touchConsumable = consumable
+                    }
+                }, "AndroidTouchBridge")
                 webChromeClient = object : android.webkit.WebChromeClient() {
                     override fun onConsoleMessage(message: android.webkit.ConsoleMessage): Boolean {
                         android.util.Log.d(
@@ -258,10 +265,8 @@ fun HtmlMessageContent(
             }
         },
         update = { webView ->
-            // 全屏界面: 切断与聊天列表的嵌套滚动, 手势全归 WebView 内部
-            // (LazyColumn 在 preScroll 阶段抢 delta 是"划不动"的根因);
-            // 非全屏内容不高不滚动, 保持嵌套协作让列表正常滚动
-            webView.isNestedScrollingEnabled = !isFullScreenLayout
+            // 嵌套滚动开关由 TouchRelayWebView 在每次 DOWN 时按 JS 探测结果管理:
+            // 页面无可滚内容 -> 手动转发 delta 给聊天列表; 有可滚内容 -> Chromium 独享
             // 内容未变化时不重复加载, 避免闪烁
             if (webView.tag != htmlDoc.hashCode()) {
                 webView.tag = htmlDoc.hashCode()
@@ -320,6 +325,124 @@ private fun buildAssetLoader(context: android.content.Context): WebViewAssetLoad
             }
         }
         .build()
+}
+
+/**
+ * 触摸转发 WebView: 解决"卡的界面无可滚内容时, 聊天列表划不动"
+ *
+ * 浏览器滚动链语义: 内部可滚元素滚手势, 滚不动/无可滚内容时手势归外层。
+ * 但 WebView 的嵌套滚动是 preScroll 父优先 (LazyColumn 抢 delta),
+ * 且 Chromium 分发低效无 fling — 所以反过来手动实现:
+ * - JS 探测当前页面有无可滚内容 (AndroidTouchBridge.setConsumable)
+ * - 无可滚 (touchConsumable=false): DOWN/UP 给 Chromium 保 tap,
+ *   移动超 touchSlop 后 CANCEL Chromium 防误点击, delta 手动
+ *   dispatchNestedPreScroll 给 LazyColumn, UP 时 dispatchNestedFling 保惯性
+ * - 有可滚 (touchConsumable=true): 禁嵌套分发, 手势全归 Chromium 内部滚动
+ */
+private class TouchRelayWebView(context: android.content.Context) : WebView(context) {
+    /** JS 探测结果: 当前页面有无 WebView 可滚内容 (JS 桥线程写, UI 线程读) */
+    @Volatile
+    var touchConsumable: Boolean = true
+
+    private var relayMode = false
+    private var relayDragging = false
+    private var downRawY = 0f
+    private var lastRawY = 0f
+    private val consumed = IntArray(2)
+    private var velocityTracker: android.view.VelocityTracker? = null
+    private val touchSlop = android.view.ViewConfiguration.get(context).scaledTouchSlop
+
+    /** 用屏幕绝对坐标(rawY)喂速度器: WebView 随列表平移时 ev.y 相对坐标会失真 */
+    private fun trackMovement(ev: android.view.MotionEvent) {
+        val copy = android.view.MotionEvent.obtain(ev)
+        copy.setLocation(ev.rawX, ev.rawY)
+        velocityTracker?.addMovement(copy)
+        copy.recycle()
+    }
+
+    @SuppressLint("ClickableViewAccessibility", "Recycle")
+    override fun onTouchEvent(ev: android.view.MotionEvent): Boolean {
+        when (ev.actionMasked) {
+            android.view.MotionEvent.ACTION_DOWN -> {
+                relayMode = !touchConsumable
+                relayDragging = false
+                downRawY = ev.rawY
+                lastRawY = ev.rawY
+                // 转发模式: 启嵌套(手动分发); WebView 模式: 禁嵌套(Chromium 独享)
+                isNestedScrollingEnabled = relayMode
+                if (relayMode) {
+                    startNestedScroll(android.view.View.SCROLL_AXIS_VERTICAL)
+                    velocityTracker?.recycle()
+                    velocityTracker = android.view.VelocityTracker.obtain()
+                    trackMovement(ev)
+                }
+                // DOWN 始终给 Chromium: tap/按钮点击需要
+                super.onTouchEvent(ev)
+                return true
+            }
+
+            android.view.MotionEvent.ACTION_MOVE -> {
+                if (!relayMode) return super.onTouchEvent(ev)
+                trackMovement(ev)
+                val dyTotal = ev.rawY - downRawY
+                if (!relayDragging) {
+                    if (kotlin.math.abs(dyTotal) > touchSlop) {
+                        relayDragging = true
+                        // 确认是滚动手势: CANCEL 掉 Chromium 的手势, 防松手误点击
+                        val cancel = android.view.MotionEvent.obtain(ev)
+                        cancel.action = android.view.MotionEvent.ACTION_CANCEL
+                        super.onTouchEvent(cancel)
+                        cancel.recycle()
+                    } else {
+                        // 微小移动: 给 Chromium 维持 tap 判定
+                        super.onTouchEvent(ev)
+                    }
+                }
+                if (relayDragging) {
+                    // rawY: 屏幕坐标, 不受 WebView 随列表平移影响, 防 delta 振荡
+                    val dy = (lastRawY - ev.rawY).toInt()
+                    if (dy != 0) {
+                        // delta 全给聊天列表 (父没消费的部分 = 列表已到头, 丢弃)
+                        dispatchNestedPreScroll(0, dy, consumed, null)
+                    }
+                    lastRawY = ev.rawY
+                }
+                return true
+            }
+
+            android.view.MotionEvent.ACTION_UP -> {
+                if (relayMode) {
+                    if (relayDragging) {
+                        trackMovement(ev)
+                        velocityTracker?.computeCurrentVelocity(1000)
+                        val vy = -(velocityTracker?.yVelocity ?: 0f)
+                        dispatchNestedFling(0f, vy, true)
+                        // Chromium 已 CANCEL, 不发 UP
+                    } else {
+                        // 纯 tap: UP 给 Chromium 触发点击
+                        super.onTouchEvent(ev)
+                    }
+                    stopNestedScroll()
+                    velocityTracker?.recycle()
+                    velocityTracker = null
+                    return true
+                }
+                return super.onTouchEvent(ev)
+            }
+
+            android.view.MotionEvent.ACTION_CANCEL -> {
+                if (relayMode) {
+                    stopNestedScroll()
+                    velocityTracker?.recycle()
+                    velocityTracker = null
+                    relayDragging = false
+                    return true
+                }
+                return super.onTouchEvent(ev)
+            }
+        }
+        return super.onTouchEvent(ev)
+    }
 }
 
 /**
@@ -533,6 +656,96 @@ private fun buildHostApiScript(messageId: String, charId: String): String {
     },
     set: function() { return true; }
   });
+
+  // ---- 透明覆盖层穿透 + 滚动内容探测 (TouchRelayWebView 手势路由) ----
+  // ST 卡常用 opacity:0 隐藏弹窗但忘了 display:none —— 透明层照样拦截
+  // 触摸 (opacity 不参与 hit-test), 把主界面罩死。修复: 透明元素
+  // 强制 pointer-events:none, 恢复不透明时还原。
+  var __PE_MARK = 'data-rk-pe';
+  function __fixInvisibleLayers() {
+    var els = document.querySelectorAll('*');
+    for (var i = 0; i < els.length; i++) {
+      var el = els[i];
+      try {
+        var cs = getComputedStyle(el);
+        if (parseFloat(cs.opacity) === 0) {
+          if (el.style.pointerEvents !== 'none') {
+            el.setAttribute(__PE_MARK, el.style.pointerEvents || '');
+            el.style.pointerEvents = 'none';
+          }
+        } else if (el.hasAttribute(__PE_MARK)) {
+          el.style.pointerEvents = el.getAttribute(__PE_MARK);
+          el.removeAttribute(__PE_MARK);
+        }
+      } catch (e) {}
+    }
+  }
+  // 元素及其祖先链是否实际可见 (排除透明层内的可滚元素)
+  function __isEffectivelyVisible(el) {
+    for (var n = el; n && n.nodeType === 1; n = n.parentElement) {
+      var cs = getComputedStyle(n);
+      if (cs.display === 'none' || cs.visibility === 'hidden' || parseFloat(cs.opacity) === 0) return false;
+    }
+    return true;
+  }
+  // 滚动内容探测: 无可滚内容时手势转发聊天列表
+  function __probeScrollable() {
+    try {
+      var de = document.documentElement, bd = document.body;
+      if (de && de.scrollHeight > innerHeight + 5) return true;
+      if (bd && bd.scrollHeight > innerHeight + 5) return true;
+      var els = document.querySelectorAll('*');
+      for (var i = 0; i < els.length; i++) {
+        var el = els[i];
+        if (el.scrollHeight <= el.clientHeight + 5 && el.scrollWidth <= el.clientWidth + 5) continue;
+        var cs = getComputedStyle(el);
+        var oy = cs.overflowY, ox = cs.overflowX;
+        if (oy !== 'auto' && oy !== 'scroll' && ox !== 'auto' && ox !== 'scroll') continue;
+        var r = el.getBoundingClientRect();
+        if (r.width > 1 && r.height > 1 && r.bottom > 0 && r.top < innerHeight && r.right > 0 && r.left < innerWidth) {
+          if (__isEffectivelyVisible(el)) return true;
+        }
+      }
+    } catch (e) {}
+    return false;
+  }
+  var __lastProbe = null;
+  function __reportProbe() {
+    try {
+      __fixInvisibleLayers();
+      var v = __probeScrollable();
+      if (v !== __lastProbe && typeof AndroidTouchBridge !== 'undefined') {
+        __lastProbe = v;
+        AndroidTouchBridge.setConsumable(v);
+      }
+    } catch (e) {}
+  }
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', function() { setTimeout(__reportProbe, 300); });
+  } else {
+    setTimeout(__reportProbe, 300);
+  }
+  window.addEventListener('load', function() { setTimeout(__reportProbe, 500); });
+  // 视图切换/弹窗开合会改 DOM class/style: 监听后节流重探
+  var __probeTimer = null;
+  function __installProbeObserver() {
+    if (window.__probeObserverInstalled) return;
+    var target = document.documentElement || document;
+    if (!target) return;
+    try {
+      new MutationObserver(function() {
+        if (__probeTimer) return;
+        __probeTimer = setTimeout(function() { __probeTimer = null; __reportProbe(); }, 400);
+      }).observe(target, { childList: true, subtree: true, attributes: true, attributeFilter: ['class', 'style', 'hidden'] });
+      window.__probeObserverInstalled = true;
+    } catch (e) {}
+  }
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', __installProbeObserver);
+  }
+  __installProbeObserver();
+  setTimeout(__installProbeObserver, 1000);
+  setInterval(__reportProbe, 2500);
 })();
 </script>
 """.trimIndent()
