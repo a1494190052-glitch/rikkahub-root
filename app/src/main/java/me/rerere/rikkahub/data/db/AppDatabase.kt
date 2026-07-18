@@ -65,7 +65,7 @@ import me.rerere.rikkahub.utils.JsonInstant
         AutoMigration(from = 22, to = 23, spec = Migration_22_23::class),
         AutoMigration(from = 23, to = 24),
         AutoMigration(from = 24, to = 25),
-        AutoMigration(from = 25, to = 26),
+        // 25→26 用手写 Migration(Migration_25_26), 因仓库缺 25.json schema 快照
     ]
 )
 @TypeConverters(TokenUsageConverter::class)
