@@ -125,6 +125,15 @@ fun HtmlMessageContent(
                         }
                     }
                 }, "AndroidHeight")
+                webChromeClient = object : android.webkit.WebChromeClient() {
+                    override fun onConsoleMessage(message: android.webkit.ConsoleMessage): Boolean {
+                        android.util.Log.d(
+                            "HtmlMessage",
+                            "[${message.messageLevel()}] ${message.message()} @${message.sourceId()}:${message.lineNumber()}"
+                        )
+                        return true
+                    }
+                }
                 webViewClient = object : WebViewClient() {
                     override fun onPageFinished(view: WebView, url: String?) {
                         super.onPageFinished(view, url)
@@ -210,11 +219,17 @@ fun HtmlMessageContent(
             // 内容未变化时不重复加载, 避免闪烁
             if (webView.tag != htmlDoc.hashCode()) {
                 webView.tag = htmlDoc.hashCode()
+                // 必须 base64 编码加载: 原始 HTML 中的 # % 等字符会导致
+                // loadDataWithBaseURL 解析异常/截断 (Android 经典坑)
+                val encoded = android.util.Base64.encodeToString(
+                    htmlDoc.toByteArray(Charsets.UTF_8),
+                    android.util.Base64.NO_WRAP
+                )
                 webView.loadDataWithBaseURL(
                     "https://rikkahub.local/",
-                    htmlDoc,
+                    encoded,
                     "text/html",
-                    "UTF-8",
+                    "base64",
                     null
                 )
             }
