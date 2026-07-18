@@ -154,6 +154,7 @@ fun HtmlMessageContent(
                             """
                             (function() {
                                 var scheduled = false;
+                                var lastHeight = 0;
                                 function measure() {
                                     var h = Math.max(
                                         document.body ? document.body.scrollHeight : 0,
@@ -169,25 +170,34 @@ fun HtmlMessageContent(
                                             if (bottom > h) h = Math.ceil(bottom);
                                         }
                                     }
-                                    AndroidHeight.post(h);
+                                    // 微小变化忽略, 避免动画抖动引发频繁重组
+                                    if (Math.abs(h - lastHeight) >= 8) {
+                                        lastHeight = h;
+                                        AndroidHeight.post(h);
+                                    }
                                 }
                                 function postHeight() {
                                     if (scheduled) return;
                                     scheduled = true;
-                                    setTimeout(function() { scheduled = false; measure(); }, 50);
+                                    setTimeout(function() { scheduled = false; measure(); }, 300);
                                 }
                                 if (window.__heightObserverInstalled) { postHeight(); return; }
                                 window.__heightObserverInstalled = true;
+                                // 不监听 style 属性: GSAP 等动画每帧改 style,
+                                // 会导致 observer 高频触发 -> 滚动卡顿
                                 new MutationObserver(postHeight)
                                     .observe(document.documentElement, {
                                         childList: true, subtree: true,
-                                        attributes: true, characterData: true
+                                        characterData: true,
+                                        attributes: true,
+                                        attributeFilter: ['class', 'id', 'src', 'href', 'open', 'width', 'height', 'colspan', 'rowspan']
                                     });
                                 window.addEventListener('load', postHeight);
                                 window.addEventListener('resize', postHeight);
                                 postHeight();
-                                setTimeout(measure, 300);
-                                setTimeout(measure, 1000);
+                                setTimeout(measure, 500);
+                                setTimeout(measure, 1500);
+                                setTimeout(measure, 3500);
                             })();
                             """.trimIndent(), null
                         )
