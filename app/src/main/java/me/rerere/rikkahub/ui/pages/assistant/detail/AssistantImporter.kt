@@ -157,13 +157,19 @@ private fun SillyTavernImporter(
                         } else {
                             emptySet()
                         }
-                        onImport(
-                            pending.card.toAssistant(
-                                greetingIndex = greetingIndex,
-                                background = pending.background,
-                                lorebookIds = lorebookIds,
-                            )
+                        val assistant = pending.card.toAssistant(
+                            greetingIndex = greetingIndex,
+                            background = pending.background,
+                            lorebookIds = lorebookIds,
                         )
+                        // 酒馆助手初始变量种入 (不覆盖已有进度)
+                        if (pending.card.tavernInitVariables.isNotBlank()) {
+                            me.rerere.rikkahub.data.model.CardVariableStore.setDataIfAbsent(
+                                "character:${assistant.id}",
+                                pending.card.tavernInitVariables
+                            )
+                        }
+                        onImport(assistant)
                         toaster.show(context.getString(R.string.assistant_importer_import_success))
                     } catch (exception: Exception) {
                         exception.printStackTrace()

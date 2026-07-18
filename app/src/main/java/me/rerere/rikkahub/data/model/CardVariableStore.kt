@@ -23,6 +23,11 @@ object CardVariableStore {
         mvuData[messageId] = json
     }
 
+    /** 仅当不存在时写入 (导入种入初始变量, 不覆盖运行时进度) */
+    fun setDataIfAbsent(messageId: String, json: String) {
+        mvuData.putIfAbsent(messageId, json)
+    }
+
     fun removeData(messageId: String) {
         mvuData.remove(messageId)
     }

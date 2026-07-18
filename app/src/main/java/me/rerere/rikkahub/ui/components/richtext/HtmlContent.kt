@@ -52,7 +52,7 @@ private val FULLSCREEN_LAYOUT_REGEX = Regex(
     "(?i)position:\\s*(fixed|absolute)|\\d+vh\\b|height:\\s*100%"
 )
 
-private const val FULLSCREEN_HEIGHT_RATIO = 0.72f
+private const val FULLSCREEN_HEIGHT_RATIO = 0.92f
 
 /**
  * ST 风格 HTML 消息渲染器
@@ -72,6 +72,7 @@ fun HtmlMessageContent(
     userName: String,
     modifier: Modifier = Modifier,
     messageId: String = "",
+    charId: String = "",
 ) {
     val context = LocalContext.current
     val density = LocalDensity.current
@@ -96,12 +97,13 @@ fun HtmlMessageContent(
             .replace("{{user}}", userName, ignoreCase = true)
     }
 
-    val htmlDoc = remember(processedContent, colorScheme, messageId) {
+    val htmlDoc = remember(processedContent, colorScheme, messageId, charId) {
         buildHtmlMessageDocument(
             content = processedContent,
             textColor = colorScheme.onSurface.toCssHex(),
             linkColor = colorScheme.primary.toCssHex(),
             messageId = messageId,
+            charId = charId,
         )
     }
 
@@ -333,12 +335,20 @@ private class TavBridge(private val messageId: String) {
  * - waitGlobalInitialized / getCurrentMessageId: 卡的 MVU 就绪判定依赖
  * - window.tav._getVariable 等: TavoJS 变量桥
  */
-private fun buildHostApiScript(messageId: String): String {
+private fun buildHostApiScript(messageId: String, charId: String): String {
     val safeId = messageId.replace("\"", "")
+    val safeCharId = charId.replace("\"", "")
     return """
 <script>
 (function() {
   var __MSG_ID = "$safeId";
+  var __CHAR_ID = "$safeCharId";
+  // MVU/Tavo 变量作用域路由: type 为 character/global/chat 时按角色级存储
+  function scopeId(opt) {
+    var t = opt && opt.type;
+    if (t === 'character' || t === 'global' || t === 'chat') return t + ':' + __CHAR_ID;
+    return (opt && opt.message_id != null) ? String(opt.message_id) : __MSG_ID;
+  }
   function parsePath(path) {
     var parts = [];
     String(path).split('.').forEach(function(seg) {
@@ -355,13 +365,11 @@ private fun buildHostApiScript(messageId: String): String {
   if (typeof window.Mvu === 'undefined') {
     window.Mvu = {
       getMvuData: function(opt) {
-        var id = (opt && opt.message_id != null) ? String(opt.message_id) : __MSG_ID;
-        var raw = AndroidTavBridge.getData(id);
+        var raw = AndroidTavBridge.getData(scopeId(opt));
         try { return raw ? JSON.parse(raw) : {}; } catch (e) { return {}; }
       },
       replaceMvuData: function(data, opt) {
-        var id = (opt && opt.message_id != null) ? String(opt.message_id) : __MSG_ID;
-        AndroidTavBridge.setData(id, JSON.stringify(data == null ? {} : data));
+        AndroidTavBridge.setData(scopeId(opt), JSON.stringify(data == null ? {} : data));
         return true;
       },
       initMvuData: function(opt) {
@@ -408,8 +416,7 @@ private fun buildHostApiScript(messageId: String): String {
         return false;
       },
       removeMvuData: function(opt) {
-        var id = (opt && opt.message_id != null) ? String(opt.message_id) : __MSG_ID;
-        AndroidTavBridge.removeData(id);
+        AndroidTavBridge.removeData(scopeId(opt));
         return true;
       }
     };
@@ -452,6 +459,62 @@ private fun buildHostApiScript(messageId: String): String {
       AndroidTavBridge.unsetVar(__MSG_ID, name);
     };
   }
+
+  // ---- 酒馆助手变量函数 (MVU 库的宿主协议, async) ----
+  function thOpt(opt) { return opt || {}; }
+  function thGet(opt) {
+    return Promise.resolve(JSON.parse(AndroidTavBridge.getData(scopeId(opt)) || '{}'));
+  }
+  function thSet(data, opt) {
+    AndroidTavBridge.setData(scopeId(opt), JSON.stringify(data == null ? {} : data));
+    return Promise.resolve();
+  }
+  function thUpdateWith(fn, opt) {
+    return thGet(opt).then(function(d) {
+      var r = (typeof fn === 'function') ? fn(d) : undefined;
+      return thSet(r !== undefined ? r : d, opt);
+    });
+  }
+  function thAssign(vars, opt) {
+    return thGet(opt).then(function(d) {
+      function merge(dst, src) {
+        for (var k in src) {
+          if (src[k] && typeof src[k] === 'object' && !Array.isArray(src[k]) &&
+              dst[k] && typeof dst[k] === 'object' && !Array.isArray(dst[k])) merge(dst[k], src[k]);
+          else dst[k] = src[k];
+        }
+        return dst;
+      }
+      merge(d, vars || {});
+      return thSet(d, opt).then(function() { return d; });
+    });
+  }
+  function thDelete(path, opt) {
+    return Promise.resolve(window.Mvu.deleteMvuVariable(path, opt));
+  }
+  var TH_REAL = {
+    getVariables: thGet,
+    replaceVariables: thSet,
+    updateVariablesWith: thUpdateWith,
+    insertOrAssignVariables: thAssign,
+    deleteVariable: thDelete,
+    getCurrentMessageId: window.getCurrentMessageId
+  };
+  // 全局函数 (酒馆助手注入到消息 iframe 的同款)
+  window.getVariables = TH_REAL.getVariables;
+  window.replaceVariables = TH_REAL.replaceVariables;
+  window.updateVariablesWith = TH_REAL.updateVariablesWith;
+  window.insertOrAssignVariables = TH_REAL.insertOrAssignVariables;
+  window.deleteVariable = TH_REAL.deleteVariable;
+  // TavernHelper: 真方法优先, 未定义方法由 Proxy 兜底为无害空实现
+  window.TavernHelper = new Proxy(TH_REAL, {
+    get: function(t, k) {
+      if (k in t) return t[k];
+      if (k === Symbol.toPrimitive) return function() { return ''; };
+      return function() { return Promise.resolve(undefined); };
+    },
+    set: function() { return true; }
+  });
 })();
 </script>
 """.trimIndent()
@@ -469,6 +532,7 @@ private fun buildHtmlMessageDocument(
     textColor: String,
     linkColor: String,
     messageId: String,
+    charId: String,
 ): String {
     val baseHead = buildString {
         append("<meta charset=\"UTF-8\">")
@@ -512,8 +576,7 @@ private fun buildHtmlMessageDocument(
                 });
                 return stub;
               }
-              if (typeof window.Mvu === 'undefined') window.Mvu = makeStub();
-              if (typeof window.TavernHelper === 'undefined') window.TavernHelper = makeStub();
+              // Mvu / TavernHelper 由后续宿主 API 脚本提供真实实现, 不在此 stub
               if (typeof window.SillyTavern === 'undefined') window.SillyTavern = makeStub();
               if (typeof window.parent === 'undefined' || window.parent === window) {
                 try { /* noop */ } catch (e) {}
@@ -523,7 +586,7 @@ private fun buildHtmlMessageDocument(
         )
         append("</script>")
         // 宿主 API: MVU 变量库 + 酒馆助手就绪判定 + TavoJS 变量桥
-        append(buildHostApiScript(messageId))
+        append(buildHostApiScript(messageId, charId))
     }
 
     return when {

@@ -53,6 +53,8 @@ data class CharacterCard(
     val depthPrompt: String = "",
     val depthPromptDepth: Int = 4,
     val depthPromptRole: MessageRole = MessageRole.SYSTEM,
+    /** 酒馆助手初始变量 (extensions.tavern_helper.variables 的 JSON 原文) */
+    val tavernInitVariables: String = "",
 ) {
     /** 所有开场白 (first_mes + alternate_greetings) */
     val greetings: List<String>
@@ -231,7 +233,16 @@ object CharacterCardParser {
             depthPrompt = parseDepthPrompt(this["extensions"])?.first ?: "",
             depthPromptDepth = parseDepthPrompt(this["extensions"])?.second ?: 4,
             depthPromptRole = parseDepthPrompt(this["extensions"])?.third ?: MessageRole.SYSTEM,
+            tavernInitVariables = parseTavernVariables(this["extensions"]),
         )
+    }
+
+    /** 提取 extensions.tavern_helper.variables 的 JSON 原文 */
+    private fun parseTavernVariables(extensions: JsonElement?): String {
+        val ext = extensions as? JsonObject ?: return ""
+        val th = ext["tavern_helper"] as? JsonObject ?: return ""
+        val vars = th["variables"] as? JsonObject ?: return ""
+        return vars.toString()
     }
 
     // region extensions (regex_scripts / depth_prompt)
