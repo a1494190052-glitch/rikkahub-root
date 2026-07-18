@@ -20,6 +20,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.webkit.WebViewAssetLoader
 import me.rerere.rikkahub.utils.toCssHex
 import java.io.File
 
@@ -101,6 +102,8 @@ fun HtmlMessageContent(
         )
     }
 
+    val assetLoader = remember { buildAssetLoader(context) }
+
     val heightDp = with(density) { contentHeightPx.toDp() }
 
     AndroidView(
@@ -136,6 +139,14 @@ fun HtmlMessageContent(
                     }
                 }
                 webViewClient = object : WebViewClient() {
+                    override fun shouldInterceptRequest(
+                        view: WebView,
+                        request: WebResourceRequest
+                    ): android.webkit.WebResourceResponse? {
+                        return assetLoader.shouldInterceptRequest(request.url)
+                            ?: super.shouldInterceptRequest(view, request)
+                    }
+
                     override fun onPageFinished(view: WebView, url: String?) {
                         super.onPageFinished(view, url)
                         // 注入高度监听: DOM 变化时回传最新高度
@@ -187,6 +198,8 @@ fun HtmlMessageContent(
                         request: WebResourceRequest
                     ): Boolean {
                         val uri = request.url
+                        // 内部资源域不拦截
+                        if (uri.host == "appassets.androidplatform.net") return false
                         return when (uri.scheme?.lowercase()) {
                             "http", "https" -> {
                                 runCatching {
@@ -220,10 +233,10 @@ fun HtmlMessageContent(
             // 内容未变化时不重复加载, 避免闪烁
             if (webView.tag != htmlDoc.hashCode()) {
                 webView.tag = htmlDoc.hashCode()
-                // 写缓存文件用 file:// 加载 — loadData 系列 API 对含 #/% 的
-                // 大体积 HTML 没有可靠的字符串传参路径 (截断/base64 不解码),
-                // 文件加载无转义问题, script/localStorage 均正常
-                webView.loadUrl("file://${writeHtmlCache(context, htmlDoc).absolutePath}")
+                // 写缓存文件, 经 WebViewAssetLoader 以 https 虚拟域加载:
+                // 无 loadData 字符串转义坑, 标准 https 同源, localStorage 可用
+                val file = writeHtmlCache(context, htmlDoc)
+                webView.loadUrl("$ASSET_ORIGIN$HTML_PATH_PREFIX${file.name}")
             }
         },
         onRelease = { it.destroy() },
@@ -237,9 +250,14 @@ fun HtmlMessageContent(
  * 附带简单 LRU: 超过 [MAX_CACHE_FILES] 个文件时删除最旧的
  */
 private const val MAX_CACHE_FILES = 50
+private const val HTML_CACHE_DIR = "html_messages"
+
+/** WebViewAssetLoader 映射的虚拟 https 域 (标准同源策略, localStorage 可用) */
+const val ASSET_ORIGIN = "https://appassets.androidplatform.net"
+private const val HTML_PATH_PREFIX = "/html-messages/"
 
 private fun writeHtmlCache(context: android.content.Context, htmlDoc: String): File {
-    val dir = File(context.cacheDir, "html_messages").apply { mkdirs() }
+    val dir = File(context.cacheDir, HTML_CACHE_DIR).apply { mkdirs() }
     val file = File(dir, "msg_" + htmlDoc.hashCode().toString(16) + ".html")
     if (!file.exists()) {
         file.writeText(htmlDoc, Charsets.UTF_8)
@@ -250,6 +268,26 @@ private fun writeHtmlCache(context: android.content.Context, htmlDoc: String): F
         }
     }
     return file
+}
+
+/**
+ * 缓存目录 <-> https://appassets.androidplatform.net/html-messages/ 映射
+ */
+private fun buildAssetLoader(context: android.content.Context): WebViewAssetLoader {
+    val cacheRoot = context.cacheDir.canonicalPath
+    return WebViewAssetLoader.Builder()
+        .addPathHandler(HTML_PATH_PREFIX) { path ->
+            val file = File(context.cacheDir, "$HTML_CACHE_DIR/$path")
+            // 防目录穿越
+            if (file.exists() && file.canonicalPath.startsWith(cacheRoot)) {
+                android.webkit.WebResourceResponse(
+                    "text/html", "UTF-8", file.inputStream()
+                )
+            } else {
+                null
+            }
+        }
+        .build()
 }
 
 /**

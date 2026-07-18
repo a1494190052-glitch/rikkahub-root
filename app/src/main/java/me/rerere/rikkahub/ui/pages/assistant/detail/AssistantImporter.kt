@@ -122,7 +122,14 @@ private fun SillyTavernImporter(
 
         OutlinedButton(
             onClick = {
-                jsonPickerLauncher.launch(arrayOf("application/json"))
+                jsonPickerLauncher.launch(
+                    arrayOf(
+                        "application/json",
+                        "application/zip",
+                        "application/x-zip-compressed",
+                        "application/octet-stream",
+                    )
+                )
             },
             enabled = !isLoading
         ) {
@@ -297,7 +304,7 @@ private fun CharacterCardPreviewDialog(
 }
 
 /**
- * 从 Uri 解析角色卡 (PNG / JSON)
+ * 从 Uri 解析角色卡 (PNG / JSON / CHARX/ZIP 卡包)
  */
 private suspend fun parseCardFromUri(
     context: Context,
@@ -305,8 +312,8 @@ private suspend fun parseCardFromUri(
     filesManager: FilesManager,
 ): PendingImport = withContext(Dispatchers.IO) {
     val mime = filesManager.getFileMimeType(uri)
-    when (mime) {
-        "image/png" -> {
+    when {
+        mime == "image/png" -> {
             val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
                 ?: error(context.getString(R.string.assistant_importer_read_json_failed))
             val card = CharacterCardParser.parsePng(bytes).getOrThrow()
@@ -315,7 +322,7 @@ private suspend fun parseCardFromUri(
             PendingImport(card, background)
         }
 
-        "application/json" -> {
+        mime == "application/json" -> {
             val json = context.contentResolver.openInputStream(uri)?.bufferedReader()
                 .use { it?.readText() }
                 ?: error(context.getString(R.string.assistant_importer_read_json_failed))
@@ -323,11 +330,74 @@ private suspend fun parseCardFromUri(
             PendingImport(card, null)
         }
 
-        else -> error(
-            context.getString(
-                R.string.assistant_importer_unsupported_file_type,
-                mime ?: "unknown"
-            )
-        )
+        // CHARX / ZIP 卡包 (或未知类型, 按 zip 尝试)
+        else -> parseCharx(context, uri)
     }
+}
+
+private const val MAX_ZIP_ENTRY_SIZE = 64 * 1024 * 1024 // 防 zip bomb
+
+/**
+ * 解析 CHARX/ZIP 卡包
+ *
+ * 规范: 根目录 card.json + 素材; 兼容包内直接放 PNG 卡
+ */
+private fun parseCharx(context: Context, uri: Uri): PendingImport {
+    val input = context.contentResolver.openInputStream(uri)
+        ?: error(context.getString(R.string.assistant_importer_read_json_failed))
+    input.use { raw ->
+        val zip = java.util.zip.ZipInputStream(raw.buffered())
+        var entry = zip.nextEntry
+        var cardJson: String? = null
+        var pngBytes: ByteArray? = null
+        while (entry != null) {
+            if (!entry.isDirectory) {
+                val name = entry.name.substringAfterLast('/')
+                when {
+                    // card.json 最优先
+                    name.equals("card.json", ignoreCase = true) ->
+                        if (cardJson == null) cardJson = readZipEntryText(zip)
+
+                    // 宽松: 首个 json (部分打包工具命名不规范)
+                    name.endsWith(".json", ignoreCase = true) && cardJson == null ->
+                        cardJson = readZipEntryText(zip)
+
+                    // 首个 PNG (卡面/内嵌卡)
+                    name.endsWith(".png", ignoreCase = true) && pngBytes == null ->
+                        pngBytes = readZipEntryBytes(zip)
+                }
+            }
+            zip.closeEntry()
+            entry = zip.nextEntry
+        }
+        // card.json 优先; 失败则回退 PNG 内嵌卡
+        cardJson?.let { json ->
+            CharacterCardParser.parseJson(json).getOrNull()?.let { card ->
+                return PendingImport(card, null)
+            }
+        }
+        pngBytes?.let { bytes ->
+            CharacterCardParser.parsePng(bytes).getOrNull()?.let { card ->
+                return PendingImport(card, null)
+            }
+        }
+        error(context.getString(R.string.assistant_importer_no_card_in_archive))
+    }
+}
+
+private fun readZipEntryText(zip: java.util.zip.ZipInputStream): String =
+    String(readZipEntryBytes(zip), Charsets.UTF_8)
+
+private fun readZipEntryBytes(zip: java.util.zip.ZipInputStream): ByteArray {
+    val out = java.io.ByteArrayOutputStream()
+    val buffer = ByteArray(8192)
+    var total = 0
+    while (true) {
+        val count = zip.read(buffer)
+        if (count < 0) break
+        total += count
+        if (total > MAX_ZIP_ENTRY_SIZE) error("Zip entry too large")
+        out.write(buffer, 0, count)
+    }
+    return out.toByteArray()
 }

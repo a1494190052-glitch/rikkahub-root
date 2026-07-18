@@ -51,6 +51,7 @@ mcp = "0.14.0"
 pebble = "4.1.1"
 browser = "1.10.0"
 appcompat = "1.7.1"
+androidxWebkit = "1.12.1"
 material = "1.14.0"
 ucrop = "2.2.11-native"
 floatingx = "2.3.7"
@@ -146,6 +147,7 @@ pebble = { module = "io.pebbletemplates:pebble", version.ref = "pebble" }
 diffutils = { module = "io.github.java-diff-utils:java-diff-utils", version.ref = "diffutils" }
 androidx-browser = { group = "androidx.browser", name = "browser", version.ref = "browser" }
 androidx-appcompat = { group = "androidx.appcompat", name = "appcompat", version.ref = "appcompat" }
+androidx-webkit = { group = "androidx.webkit", name = "webkit", version.ref = "androidxWebkit" }
 material = { group = "com.google.android.material", name = "material", version.ref = "material" }
 ucrop = { group = "com.github.yalantis", name = "ucrop", version.ref = "ucrop" }
 floatingx = { group = "io.github.petterpx", name = "floatingx", version.ref = "floatingx" }
