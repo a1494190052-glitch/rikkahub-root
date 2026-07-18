@@ -15,11 +15,11 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
-import me.rerere.rikkahub.utils.base64Encode
 import me.rerere.rikkahub.utils.toCssHex
 
 /**
@@ -44,6 +44,13 @@ fun unwrapHtmlFences(text: String): String {
     return HTML_FENCE_REGEX.replace(text) { it.groupValues[1].trim() }
 }
 
+/** 全屏布局特征: 内容主要用 fixed/absolute/100vh 定位, 不占文档流 */
+private val FULLSCREEN_LAYOUT_REGEX = Regex(
+    "(?i)position:\\s*(fixed|absolute)|\\d+vh\\b|height:\\s*100%"
+)
+
+private const val FULLSCREEN_HEIGHT_RATIO = 0.72f
+
 /**
  * ST 风格 HTML 消息渲染器
  *
@@ -64,8 +71,19 @@ fun HtmlMessageContent(
 ) {
     val context = LocalContext.current
     val density = LocalDensity.current
+    val configuration = LocalConfiguration.current
     val colorScheme = MaterialTheme.colorScheme
-    var contentHeightPx by remember { mutableIntStateOf(96) }
+
+    // 全屏布局 (position:fixed / 100vh / height:100%) 的内容不占文档流,
+    // scrollHeight 测不出真实高度 — 给足默认视口高度
+    val isFullScreenLayout = remember(content) { FULLSCREEN_LAYOUT_REGEX.containsMatchIn(content) }
+    val initialHeightPx = remember(isFullScreenLayout) {
+        with(density) {
+            (if (isFullScreenLayout) (configuration.screenHeightDp * FULLSCREEN_HEIGHT_RATIO).dp else 96.dp)
+                .toPx().toInt()
+        }
+    }
+    var contentHeightPx by remember(content) { mutableIntStateOf(initialHeightPx) }
 
     // 显示层占位符替换 + ```html 栅栏剥离 (ST 渲染行为)
     val processedContent = remember(content, charName, userName) {
@@ -103,7 +121,7 @@ fun HtmlMessageContent(
                     @JavascriptInterface
                     fun postHeight(height: Int) {
                         if (height > 0) {
-                            post { contentHeightPx = height }
+                            post { contentHeightPx = maxOf(height, initialHeightPx) }
                         }
                     }
                 }, "AndroidHeight")
@@ -114,16 +132,32 @@ fun HtmlMessageContent(
                         view.evaluateJavascript(
                             """
                             (function() {
-                                function postHeight() {
+                                var scheduled = false;
+                                function measure() {
                                     var h = Math.max(
                                         document.body ? document.body.scrollHeight : 0,
                                         document.documentElement ? document.documentElement.scrollHeight : 0
                                     );
+                                    // fixed/absolute 元素不占文档流: 取所有元素下边界最大值兜底
+                                    var els = document.body ? document.body.querySelectorAll('*') : [];
+                                    var limit = Math.min(els.length, 500);
+                                    for (var i = 0; i < limit; i++) {
+                                        var r = els[i].getBoundingClientRect();
+                                        if (r.height > 0) {
+                                            var bottom = r.bottom + window.scrollY;
+                                            if (bottom > h) h = Math.ceil(bottom);
+                                        }
+                                    }
                                     AndroidHeight.post(h);
+                                }
+                                function postHeight() {
+                                    if (scheduled) return;
+                                    scheduled = true;
+                                    setTimeout(function() { scheduled = false; measure(); }, 50);
                                 }
                                 if (window.__heightObserverInstalled) { postHeight(); return; }
                                 window.__heightObserverInstalled = true;
-                                new MutationObserver(function() { postHeight(); })
+                                new MutationObserver(postHeight)
                                     .observe(document.documentElement, {
                                         childList: true, subtree: true,
                                         attributes: true, characterData: true
@@ -131,8 +165,8 @@ fun HtmlMessageContent(
                                 window.addEventListener('load', postHeight);
                                 window.addEventListener('resize', postHeight);
                                 postHeight();
-                                setTimeout(postHeight, 300);
-                                setTimeout(postHeight, 1000);
+                                setTimeout(measure, 300);
+                                setTimeout(measure, 1000);
                             })();
                             """.trimIndent(), null
                         )
@@ -191,51 +225,81 @@ fun HtmlMessageContent(
 }
 
 /**
- * 包装消息 HTML 为完整文档, 注入基础样式
+ * 包装消息 HTML 为完整文档
+ *
+ * 内容直接作为文档加载 (非 innerHTML 注入) — innerHTML 插入的 <script>
+ * 不会执行, 而 ST 卡界面大量依赖 JS 动态生成。基础样式与 ST API 桩
+ * 注入到 </head> 前 (或包装为新文档)。
  */
 private fun buildHtmlMessageDocument(
     content: String,
     textColor: String,
     linkColor: String,
 ): String {
-    val contentBase64 = content.base64Encode()
-    return """
-<!DOCTYPE html>
-<html>
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<style>
-  html, body {
-    margin: 0; padding: 0;
-    background: transparent;
-    color: $textColor;
-    font-size: 15px;
-    line-height: 1.6;
-    word-wrap: break-word;
-    overflow-wrap: break-word;
-    -webkit-text-size-adjust: 100%;
-  }
-  img, video, audio, iframe, canvas, svg { max-width: 100%; height: auto; }
-  a { color: $linkColor; }
-  table { border-collapse: collapse; max-width: 100%; }
-  td, th { padding: 4px 8px; }
-  pre { white-space: pre-wrap; word-wrap: break-word; }
-  * { max-width: 100%; }
-</style>
-</head>
-<body>
-<div id="content"></div>
-<script>
-  function decodeBase64Utf8(b64) {
-    var bin = atob(b64);
-    var bytes = new Uint8Array(bin.length);
-    for (var i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-    return new TextDecoder('utf-8').decode(bytes);
-  }
-  document.getElementById('content').innerHTML = decodeBase64Utf8("$contentBase64");
-</script>
-</body>
-</html>
-""".trimIndent()
+    val baseHead = buildString {
+        append("<meta charset=\"UTF-8\">")
+        append("<meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">")
+        append("<style>")
+        append(
+            """
+            html, body {
+              margin: 0; padding: 0;
+              background: transparent;
+              color: $textColor;
+              font-size: 15px;
+              line-height: 1.6;
+              word-wrap: break-word;
+              overflow-wrap: break-word;
+              -webkit-text-size-adjust: 100%;
+            }
+            img, video, audio, iframe, canvas, svg { max-width: 100%; height: auto; }
+            a { color: $linkColor; }
+            table { border-collapse: collapse; max-width: 100%; }
+            td, th { padding: 4px 8px; }
+            pre { white-space: pre-wrap; word-wrap: break-word; }
+            """.trimIndent()
+        )
+        append("</style>")
+        // ST/酒馆助手 API 桩: 防止卡内脚本因缺少宿主 API 而报错中断渲染
+        append("<script>")
+        append(
+            """
+            (function() {
+              function makeStub() {
+                var fn = function() { return stub; };
+                var stub = new Proxy(fn, {
+                  get: function(t, k) {
+                    if (k === Symbol.toPrimitive) return function() { return ''; };
+                    if (k === 'then') return undefined;
+                    return stub;
+                  },
+                  apply: function() { return stub; },
+                  set: function() { return true; }
+                });
+                return stub;
+              }
+              if (typeof window.Mvu === 'undefined') window.Mvu = makeStub();
+              if (typeof window.TavernHelper === 'undefined') window.TavernHelper = makeStub();
+              if (typeof window.SillyTavern === 'undefined') window.SillyTavern = makeStub();
+              if (typeof window.parent === 'undefined' || window.parent === window) {
+                try { /* noop */ } catch (e) {}
+              }
+            })();
+            """.trimIndent()
+        )
+        append("</script>")
+    }
+
+    return when {
+        // 完整 HTML 文档: 基础样式注入 </head> 前
+        content.contains("</head>", ignoreCase = true) ->
+            content.replaceFirst(Regex("</head>", RegexOption.IGNORE_CASE), "$baseHead</head>")
+
+        // 有 body 无 head: 插到 body 开标签后
+        Regex("<body[^>]*>", RegexOption.IGNORE_CASE).containsMatchIn(content) ->
+            content.replaceFirst(Regex("<body[^>]*>", RegexOption.IGNORE_CASE)) { it.value + baseHead }
+
+        // HTML 片段: 包装为新文档
+        else -> "<!DOCTYPE html><html><head>$baseHead</head><body>$content</body></html>"
+    }
 }
