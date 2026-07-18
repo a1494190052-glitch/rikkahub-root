@@ -704,6 +704,7 @@ sealed interface Screen : NavKey {
     @Serializable
     data object ScheduledTasks : Screen
 
+    @Serializable
     data object ShellAudit : Screen
 
     @Serializable
