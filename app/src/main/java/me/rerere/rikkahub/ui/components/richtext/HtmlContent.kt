@@ -130,8 +130,18 @@ fun HtmlMessageContent(
                     @JavascriptInterface
                     fun postHeight(height: Int) {
                         if (height > 0) {
-                            // 全屏界面不缩到初始视口以下; 非全屏跟随内容
-                            post { contentHeightPx = if (isFullScreenLayout) maxOf(height, initialHeightPx) else height }
+                            // 全屏界面(100vh/vh 布局): 高度恒定为初始视口(92%屏高), 忽略 JS 报告。
+                            // vh 单位随 WebView 高度重算, 采纳报告值会形成正反馈
+                            // (WebView 越高 → 100vh 越大 → 内容越高 → 报告值越大),
+                            // 且 bottom 兜底在滚动时叠加 scrollY 把高度越滚越大。
+                            // 固定高度后 WebView 即视口, 内部滚动全归 Chromium 合成器。
+                            android.util.Log.d(
+                                "HtmlMessage",
+                                "postHeight report=$height full=$isFullScreenLayout adopted=${if (isFullScreenLayout) initialHeightPx else height}"
+                            )
+                            if (!isFullScreenLayout) {
+                                post { contentHeightPx = height }
+                            }
                         }
                     }
                 }, "AndroidHeight")
@@ -156,6 +166,10 @@ fun HtmlMessageContent(
 
                     override fun onPageFinished(view: WebView, url: String?) {
                         super.onPageFinished(view, url)
+                        // 全屏界面高度恒定(=初始视口), 无需高度回传;
+                        // 测量脚本每次遍历 500 元素取 getBoundingClientRect 会强制
+                        // reflow, 滚动期被 ResizeObserver 反复触发 = JS 主线程卡顿源, 不注入
+                        if (isFullScreenLayout) return
                         // 注入高度监听: DOM 变化时回传最新高度
                         view.evaluateJavascript(
                             """
