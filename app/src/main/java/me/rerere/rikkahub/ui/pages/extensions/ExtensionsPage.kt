@@ -21,6 +21,7 @@ import me.rerere.hugeicons.stroke.Book03
 import me.rerere.hugeicons.stroke.File02
 import me.rerere.hugeicons.stroke.Folder01
 import me.rerere.hugeicons.stroke.Puzzle
+import me.rerere.hugeicons.stroke.Time02
 import me.rerere.hugeicons.stroke.Zap
 import me.rerere.rikkahub.Screen
 import me.rerere.rikkahub.ui.components.nav.BackButton
