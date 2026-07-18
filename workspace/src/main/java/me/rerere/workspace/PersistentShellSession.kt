@@ -91,52 +91,30 @@ class PersistentShellSession private constructor(
 
         val deadline = System.currentTimeMillis() + timeoutMillis
         while (true) {
-            val matcher = synchronized(lock) {
-                val found = SENTINEL_PATTERN.matcher(buffer).region(mark, buffer.length)
-                val hit = if (found.find()) found else null
-                if (hit != null) {
-                    val output = buffer.substring(mark, hit.start())
-                    buffer.delete(mark, hit.end())
-                    lock.notifyAll()
-                    Pair(output, hit)
-                } else if (dead) {
-                    Pair(null, null)
-                } else {
-                    val remaining = deadline - System.currentTimeMillis()
-                    if (remaining > 0) {
-                        try {
-                            lock.wait(remaining.coerceAtMost(500L))
-                        } catch (e: InterruptedException) {
-                            destroy()
-                            throw e
-                        }
-                    }
-                    null
-                }
-            }
-            when {
-                matcher != null -> {
-                    val (output, hit) = matcher
-                    val exitCode = hit.group(1)?.toIntOrNull() ?: -1
-                    currentCwd = hit.group(2)?.trim().orEmpty()
+            // synchronized 是 inline 函数, 允许在块内直接 return
+            synchronized(lock) {
+                val found = SENTINEL_PATTERN.matcher(buffer)
+                found.region(mark, buffer.length)
+                if (found.find()) {
+                    val output = buffer.substring(mark, found.start())
+                    buffer.delete(mark, found.end())
+                    currentCwd = found.group(2)?.trim().orEmpty()
                     return WorkspaceCommandResult(
-                        exitCode = exitCode,
+                        exitCode = found.group(1)?.toIntOrNull() ?: -1,
                         stdout = output.trimEnd('\n'),
                         stderr = "",
                         timedOut = false,
                         truncated = false,
                     )
                 }
-                dead -> {
-                    val leftover = synchronized(lock) {
-                        buffer.substring(mark.coerceAtMost(buffer.length)).also { buffer.setLength(0) }
-                    }
+                if (dead) {
+                    val leftover = buffer.substring(mark.coerceAtMost(buffer.length))
+                    buffer.setLength(0)
                     return WorkspaceCommandResult(-1, leftover, "shell session terminated", timedOut = false)
                 }
-                System.currentTimeMillis() >= deadline -> {
-                    val partial = synchronized(lock) {
-                        buffer.substring(mark.coerceAtMost(buffer.length)).also { buffer.setLength(0) }
-                    }
+                if (System.currentTimeMillis() >= deadline) {
+                    val partial = buffer.substring(mark.coerceAtMost(buffer.length))
+                    buffer.setLength(0)
                     destroy()
                     return WorkspaceCommandResult(
                         exitCode = -1,
@@ -144,6 +122,15 @@ class PersistentShellSession private constructor(
                         stderr = "command timed out after ${timeoutMillis}ms; shell session was killed and will be recreated on next call",
                         timedOut = true,
                     )
+                }
+                val remaining = deadline - System.currentTimeMillis()
+                if (remaining > 0) {
+                    try {
+                        lock.wait(remaining.coerceAtMost(500L))
+                    } catch (e: InterruptedException) {
+                        destroy()
+                        throw e
+                    }
                 }
             }
         }
