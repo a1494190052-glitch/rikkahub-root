@@ -78,6 +78,7 @@ import me.rerere.rikkahub.Screen
 import me.rerere.rikkahub.data.model.Assistant
 import me.rerere.rikkahub.data.model.AssistantAffectScope
 import me.rerere.rikkahub.data.model.MessageNode
+import me.rerere.rikkahub.data.model.RegexApplyMode
 import me.rerere.rikkahub.data.model.replaceRegexes
 import me.rerere.rikkahub.ui.components.richtext.HtmlMessageContent
 import me.rerere.rikkahub.ui.components.richtext.MarkdownBlock
@@ -372,7 +373,7 @@ private fun MessagePartsBlock(
                                             content = part.text.replaceRegexes(
                                                 assistant = assistant,
                                                 scope = AssistantAffectScope.USER,
-                                                visual = true,
+                                                mode = RegexApplyMode.VISUAL,
                                             ),
                                             onClickCitation = handleClickCitation
                                         )
@@ -382,7 +383,7 @@ private fun MessagePartsBlock(
                                 val processedText = part.text.replaceRegexes(
                                     assistant = assistant,
                                     scope = AssistantAffectScope.ASSISTANT,
-                                    visual = true,
+                                    mode = RegexApplyMode.VISUAL,
                                 )
                                 // ST 高级渲染: 生成结束后的 HTML 消息用 WebView 原样渲染
                                 // (流式期间仍走 Markdown, 避免 WebView 频繁重载闪烁)

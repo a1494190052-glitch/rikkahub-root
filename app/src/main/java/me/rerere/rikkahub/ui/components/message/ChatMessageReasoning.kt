@@ -45,6 +45,7 @@ import me.rerere.hugeicons.stroke.Idea01
 import me.rerere.rikkahub.R
 import me.rerere.rikkahub.data.model.Assistant
 import me.rerere.rikkahub.data.model.AssistantAffectScope
+import me.rerere.rikkahub.data.model.RegexApplyMode
 import me.rerere.rikkahub.data.model.replaceRegexes
 import me.rerere.rikkahub.ui.components.richtext.MarkdownBlock
 import me.rerere.rikkahub.ui.components.ui.ChainOfThoughtScope
@@ -172,7 +173,7 @@ private fun ReasoningContent(
                 content = reasoning.reasoning.replaceRegexes(
                     assistant = assistant,
                     scope = AssistantAffectScope.ASSISTANT,
-                    visual = true,
+                    mode = RegexApplyMode.VISUAL,
                 ),
                 style = reasoningTextStyle,
                 modifier = Modifier.fillMaxSize(),

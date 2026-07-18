@@ -79,7 +79,19 @@ data class AssistantRegex(
     val replaceString: String = "", // 替换字符串
     val affectingScope: Set<AssistantAffectScope> = setOf(),
     val visualOnly: Boolean = false, // 是否仅在视觉上影响
+    val promptOnly: Boolean = false, // 是否仅在发送给模型时应用 (ST promptOnly), transient 不改存储
+    val minDepth: Int? = null, // ST 深度限制: 仅对深度 >= minDepth 的消息生效 (发送通道)
+    val maxDepth: Int? = null, // ST 深度限制: 仅对深度 <= maxDepth 的消息生效 (发送通道)
 )
+
+/**
+ * 正则应用通道 (对齐 SillyTavern 三通道语义)
+ *
+ * - VISUAL: 显示层 (transient), ST markdownOnly/displayOnly
+ * - OUTPUT: 输出层 (写入存储), RikkaHub 原生行为
+ * - PROMPT: 发送层 (transient, 仅影响发给模型的内容), ST promptOnly
+ */
+enum class RegexApplyMode { VISUAL, OUTPUT, PROMPT }
 
 // 流式输出时每个chunk都会调用replaceRegexes，正则必须缓存编译结果，
 // 否则长回复期间会重复编译上万次；编译失败也缓存，避免反复构造异常
@@ -156,12 +168,24 @@ internal fun resolveJsReplacement(replacement: String, match: MatchResult): Stri
 fun String.replaceRegexes(
     assistant: Assistant?,
     scope: AssistantAffectScope,
-    visual: Boolean = false
+    mode: RegexApplyMode = RegexApplyMode.OUTPUT,
+    depth: Int? = null,
 ): String {
     if (assistant == null) return this
     if (assistant.regexes.isEmpty()) return this
     return assistant.regexes.fold(this) { acc, regex ->
-        if (regex.enabled && regex.visualOnly == visual && regex.affectingScope.contains(scope)) {
+        val modeMatch = when (mode) {
+            RegexApplyMode.VISUAL -> regex.visualOnly
+            RegexApplyMode.OUTPUT -> !regex.visualOnly && !regex.promptOnly
+            RegexApplyMode.PROMPT -> regex.promptOnly
+        }
+        val depthMatch = if (mode == RegexApplyMode.PROMPT && depth != null) {
+            (regex.minDepth?.let { depth >= it } ?: true) &&
+                (regex.maxDepth?.let { depth <= it } ?: true)
+        } else {
+            true
+        }
+        if (regex.enabled && modeMatch && depthMatch && regex.affectingScope.contains(scope)) {
             val compiled = compileRegexCached(regex.findRegex) ?: return@fold acc
             try {
                 // 使用 JS 语义的 replacement 解析 (兼容 SillyTavern 正则脚本):

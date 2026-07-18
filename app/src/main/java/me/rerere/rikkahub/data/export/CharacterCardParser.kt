@@ -286,6 +286,8 @@ object CharacterCardParser {
 
             val visualOnly = (script.bool("markdownOnly") ?: false) || (script.bool("displayOnly") ?: false)
             val promptOnly = script.bool("promptOnly") ?: false
+            val minDepth = script.int("minDepth")
+            val maxDepth = script.int("maxDepth")
 
             val base = AssistantRegex(
                 id = Uuid.random(),
@@ -294,13 +296,18 @@ object CharacterCardParser {
                 findRegex = findRegex,
                 replaceString = replaceString,
                 affectingScope = scopes,
+                minDepth = minDepth,
+                maxDepth = maxDepth,
             )
             when {
+                // 仅显示层 (transient)
                 visualOnly -> listOf(base.copy(visualOnly = true))
-                promptOnly -> listOf(base.copy(visualOnly = false))
+                // 仅发送层 (transient, 不动存储与显示)
+                promptOnly -> listOf(base.copy(promptOnly = true))
+                // ST 语义: 显示 + 发送都应用 (均 transient), 拆成两条
                 else -> listOf(
                     base.copy(id = Uuid.random(), visualOnly = true),
-                    base.copy(visualOnly = false),
+                    base.copy(promptOnly = true),
                 )
             }
         }.flatten()
