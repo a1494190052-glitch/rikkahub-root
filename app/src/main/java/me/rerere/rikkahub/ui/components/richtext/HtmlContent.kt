@@ -15,6 +15,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
@@ -76,10 +77,16 @@ fun HtmlMessageContent(
     val density = LocalDensity.current
     val colorScheme = MaterialTheme.colorScheme
 
-    // 全屏布局 (100vh/height:100%/fixed) 的界面内部自滚动, 会与聊天列表
-    // 嵌套滚动抢手势 ("划不动") — 解放为自然文档流, 高度=内容全高
+    // 全屏布局 (100vh/height:100%/fixed): 保留界面原布局, WebView 固定
+    // 92% 屏高并切断嵌套滚动 — 手势全归 WebView 内部滚动 (浏览器原生速度);
+    // 非全屏内容: 高度=内容全高, 滚动交给聊天列表
     val isFullScreenLayout = remember(content) { FULLSCREEN_LAYOUT_REGEX.containsMatchIn(content) }
-    val initialHeightPx = remember { with(density) { 96.dp.toPx().toInt() } }
+    val configuration = LocalConfiguration.current
+    val initialHeightPx = remember(isFullScreenLayout) {
+        with(density) {
+            (if (isFullScreenLayout) (configuration.screenHeightDp * 0.92f).dp else 96.dp).toPx().toInt()
+        }
+    }
     var contentHeightPx by remember(content) { mutableIntStateOf(initialHeightPx) }
 
     // 显示层占位符替换 + ```html 栅栏剥离 (ST 渲染行为)
@@ -123,7 +130,8 @@ fun HtmlMessageContent(
                     @JavascriptInterface
                     fun postHeight(height: Int) {
                         if (height > 0) {
-                            post { contentHeightPx = height }
+                            // 全屏界面不缩到初始视口以下; 非全屏跟随内容
+                            post { contentHeightPx = if (isFullScreenLayout) maxOf(height, initialHeightPx) else height }
                         }
                     }
                 }, "AndroidHeight")
@@ -149,47 +157,11 @@ fun HtmlMessageContent(
                     override fun onPageFinished(view: WebView, url: String?) {
                         super.onPageFinished(view, url)
                         // 注入高度监听: DOM 变化时回传最新高度
-                        val liberateScript = if (isFullScreenLayout) """
-                                // 解放 100vh/height:100% 布局 -> 自然文档流, 消除内部滚动
-                                function liberate() {
-                                    var vh = window.innerHeight;
-                                    document.documentElement.style.setProperty('height', 'auto', 'important');
-                                    document.documentElement.style.setProperty('overflow', 'visible', 'important');
-                                    if (document.body) {
-                                        document.body.style.setProperty('height', 'auto', 'important');
-                                        document.body.style.setProperty('overflow', 'visible', 'important');
-                                    }
-                                    var els = document.querySelectorAll('*');
-                                    var limit = Math.min(els.length, 800);
-                                    for (var i = 0; i < limit; i++) {
-                                        var el = els[i];
-                                        if (el === document.documentElement || el === document.body) continue;
-                                        var cs = getComputedStyle(el);
-                                        // 容器高度≈视口高 -> 锁视口的滚动容器, 解除
-                                        var h = parseFloat(cs.height);
-                                        if (h > 0 && Math.abs(h - vh) < vh * 0.08) {
-                                            el.style.setProperty('height', 'auto', 'important');
-                                            el.style.setProperty('max-height', 'none', 'important');
-                                            if (cs.overflowY === 'auto' || cs.overflowY === 'scroll' || cs.overflow === 'hidden') {
-                                                el.style.setProperty('overflow', 'visible', 'important');
-                                                el.style.setProperty('overflow-y', 'visible', 'important');
-                                            }
-                                        } else if (cs.overflowY === 'auto' || cs.overflowY === 'scroll') {
-                                            // 非视口高但自滚动的容器也解放
-                                            el.style.setProperty('height', 'auto', 'important');
-                                            el.style.setProperty('max-height', 'none', 'important');
-                                            el.style.setProperty('overflow', 'visible', 'important');
-                                            el.style.setProperty('overflow-y', 'visible', 'important');
-                                        }
-                                    }
-                                }
-                                """ else ""
                         view.evaluateJavascript(
                             """
                             (function() {
                                 var scheduled = false;
                                 var lastHeight = 0;
-                                $liberateScript
                                 function measure() {
                                     var h = Math.max(
                                         document.body ? document.body.scrollHeight : 0,
@@ -218,13 +190,6 @@ fun HtmlMessageContent(
                                 }
                                 if (window.__heightObserverInstalled) { scheduleMeasure(); return; }
                                 window.__heightObserverInstalled = true;
-                                // 先解放全屏滚动容器, 再开始测高
-                                if (typeof liberate === 'function') {
-                                    liberate();
-                                    setTimeout(liberate, 400);
-                                    setTimeout(liberate, 1200);
-                                    setTimeout(liberate, 3000);
-                                }
                                 // ResizeObserver (Tavo 方案): 只在 body 尺寸真正变化时触发,
                                 // CSS transform 动画不触发 -> 不会随动画帧风暴
                                 if (typeof ResizeObserver !== 'undefined') {
@@ -279,6 +244,10 @@ fun HtmlMessageContent(
             }
         },
         update = { webView ->
+            // 全屏界面: 切断与聊天列表的嵌套滚动, 手势全归 WebView 内部
+            // (LazyColumn 在 preScroll 阶段抢 delta 是"划不动"的根因);
+            // 非全屏内容不高不滚动, 保持嵌套协作让列表正常滚动
+            webView.isNestedScrollingEnabled = !isFullScreenLayout
             // 内容未变化时不重复加载, 避免闪烁
             if (webView.tag != htmlDoc.hashCode()) {
                 webView.tag = htmlDoc.hashCode()
