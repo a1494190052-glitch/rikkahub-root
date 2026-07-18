@@ -40,4 +40,8 @@ sealed class LocalToolOption {
     @Serializable
     @SerialName("sub_agents")
     data object SubAgents : LocalToolOption()
+
+    @Serializable
+    @SerialName("scheduler")
+    data object Scheduler : LocalToolOption()
 }

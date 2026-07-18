@@ -147,6 +147,7 @@ class ChatService(
     private val providerManager: ProviderManager,
     private val localTools: LocalTools,
     private val subAgentExecutor: me.rerere.rikkahub.data.ai.tools.local.SubAgentExecutor,
+    private val scheduledTaskRepository: me.rerere.rikkahub.service.scheduler.ScheduledTaskRepository,
     val mcpManager: McpManager,
     private val filesManager: FilesManager,
     private val skillManager: SkillManager,
@@ -542,6 +543,13 @@ class ChatService(
                     if (assistant.localTools.contains(me.rerere.rikkahub.data.ai.tools.local.LocalToolOption.SubAgents)) {
                         add(me.rerere.rikkahub.data.ai.tools.local.buildHireAgentTool(subAgentExecutor, assistant))
                         add(me.rerere.rikkahub.data.ai.tools.local.buildHireTeamTool(subAgentExecutor, assistant))
+                    }
+                    // 定时任务: AI 主动消息调度 (ScheduleTools.kt)
+                    if (assistant.localTools.contains(me.rerere.rikkahub.data.ai.tools.local.LocalToolOption.Scheduler)) {
+                        add(me.rerere.rikkahub.data.ai.tools.local.buildCreateScheduleTool(scheduledTaskRepository, assistant))
+                        add(me.rerere.rikkahub.data.ai.tools.local.buildListSchedulesTool(scheduledTaskRepository, assistant))
+                        add(me.rerere.rikkahub.data.ai.tools.local.buildDeleteScheduleTool(scheduledTaskRepository, assistant))
+                        add(me.rerere.rikkahub.data.ai.tools.local.buildToggleScheduleTool(scheduledTaskRepository, assistant))
                     }
                     if (assistant.enableRecentChatsReference) {
                         addAll(createConversationTools(conversationRepo, assistant.id))

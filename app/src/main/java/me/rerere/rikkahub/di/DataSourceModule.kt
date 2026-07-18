@@ -169,6 +169,25 @@ val dataSourceModule = module {
         )
     }
 
+    single { get<AppDatabase>().scheduledTaskDao() }
+
+    single {
+        me.rerere.rikkahub.service.scheduler.ScheduledTaskRepository(
+            context = get(),
+            dao = get(),
+        )
+    }
+
+    single {
+        me.rerere.rikkahub.service.scheduler.ScheduledTaskExecutor(
+            context = get(),
+            settingsStore = get(),
+            providerManager = get(),
+            scheduledTaskDao = get(),
+            conversationRepo = get(),
+        )
+    }
+
     single<OkHttpClient> {
         val acceptLang = AcceptLanguageBuilder.fromAndroid(get())
             .build()

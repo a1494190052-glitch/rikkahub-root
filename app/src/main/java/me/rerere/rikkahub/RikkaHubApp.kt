@@ -108,10 +108,27 @@ class RikkaHubApp : Application() {
         startFloatingTaskServiceIfEnabled()
         seedRootPresetAssistant()
 
+        // 定时任务: 启动时重排（闹钟不持久化，可能被系统清除）
+        rescheduleScheduledTasks()
+
         // Increment launch count
         incrementLaunchCount()
 
         // Composer.setDiagnosticStackTraceMode(ComposeStackTraceMode.Auto)
+    }
+
+    private fun rescheduleScheduledTasks() {
+        get<AppScope>().launch(Dispatchers.IO) {
+            runCatching {
+                val repo = get<me.rerere.rikkahub.service.scheduler.ScheduledTaskRepository>()
+                me.rerere.rikkahub.service.scheduler.TaskScheduler.rescheduleAll(
+                    this@RikkaHubApp,
+                    repo.getEnabled()
+                )
+            }.onFailure {
+                Log.e(TAG, "rescheduleScheduledTasks failed", it)
+            }
+        }
     }
 
     private fun incrementLaunchCount() {
@@ -291,6 +308,17 @@ class RikkaHubApp : Application() {
             .setShowBadge(false)
             .build()
         notificationManager.createNotificationChannel(webServerChannel)
+
+        // 定时任务主动消息渠道 (高重要性: 主动消息需要提醒)
+        val scheduledTaskChannel = NotificationChannelCompat
+            .Builder(
+                me.rerere.rikkahub.service.scheduler.SCHEDULED_TASK_NOTIFICATION_CHANNEL_ID,
+                NotificationManagerCompat.IMPORTANCE_HIGH
+            )
+            .setName(getString(R.string.notification_channel_scheduled_task))
+            .setVibrationEnabled(true)
+            .build()
+        notificationManager.createNotificationChannel(scheduledTaskChannel)
     }
 
     override fun onTerminate() {

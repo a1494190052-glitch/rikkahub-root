@@ -1306,4 +1306,23 @@
   <string name="chat_page_folder_add">New</string>
   <string name="chat_page_delete_folder_confirm">Delete folder "%1$s"? Conversations inside will not be deleted, only removed from the folder.</string>
   <string name="chat_page_delete_folder_generating">Some conversations in this folder are still generating. Please stop them before deleting.</string>
+  <string name="scheduled_tasks_page_title">Scheduled Tasks</string>
+  <string name="scheduled_tasks_empty">No scheduled tasks yet. Tap the button below to create one, or just tell the AI: "remind me every day at 8am" (requires the Scheduled Tasks tool enabled on the assistant)</string>
+  <string name="scheduled_tasks_new">New Task</string>
+  <string name="scheduled_tasks_create">Create</string>
+  <string name="scheduled_tasks_field_title">Task name</string>
+  <string name="scheduled_tasks_field_prompt">Prompt sent to AI at trigger time</string>
+  <string name="scheduled_tasks_field_assistant">Select assistant</string>
+  <string name="scheduled_tasks_field_time">Time (HH:mm)</string>
+  <string name="scheduled_tasks_field_weekdays">Weekdays (1=Mon..7=Sun, comma separated)</string>
+  <string name="scheduled_tasks_field_interval">Interval minutes (>=15)</string>
+  <string name="scheduled_tasks_type_daily">Daily</string>
+  <string name="scheduled_tasks_type_weekly">Weekly</string>
+  <string name="scheduled_tasks_type_interval">Interval</string>
+  <string name="scheduled_tasks_next">Next</string>
+  <string name="extensions_page_scheduled_tasks">Scheduled Tasks</string>
+  <string name="extensions_page_scheduled_tasks_desc">Proactive AI messages: reminders, daily briefings, recurring jobs</string>
+  <string name="notification_channel_scheduled_task">Scheduled Messages</string>
+  <string name="assistant_page_local_tools_scheduler_title">Scheduled Tasks (Proactive)</string>
+  <string name="assistant_page_local_tools_scheduler_desc">Let the AI create scheduled tasks (create_schedule / list / delete / toggle) and proactively message you at the scheduled time, posted to a conversation with a notification</string>
 </resources>

@@ -86,6 +86,7 @@ val appModule = module {
             providerManager = get(),
             localTools = get(),
             subAgentExecutor = get(),
+            scheduledTaskRepository = get(),
             mcpManager = get(),
             filesManager = get(),
             skillManager = get(),

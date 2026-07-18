@@ -80,6 +80,12 @@ fun ExtensionsPage() {
                         headlineContent = { Text(stringResource(R.string.extensions_page_workspace)) },
                         supportingContent = { Text(stringResource(R.string.extensions_page_workspace_desc)) },
                     )
+                    item(
+                        onClick = { navController.navigate(Screen.ScheduledTasks) },
+                        leadingContent = { Icon(HugeIcons.Clock02, null) },
+                        headlineContent = { Text(stringResource(R.string.extensions_page_scheduled_tasks)) },
+                        supportingContent = { Text(stringResource(R.string.extensions_page_scheduled_tasks_desc)) },
+                    )
                 }
             }
         }
