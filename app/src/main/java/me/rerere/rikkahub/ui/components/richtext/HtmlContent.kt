@@ -15,7 +15,6 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
@@ -52,7 +51,6 @@ private val FULLSCREEN_LAYOUT_REGEX = Regex(
     "(?i)position:\\s*(fixed|absolute)|\\d+vh\\b|height:\\s*100%"
 )
 
-private const val FULLSCREEN_HEIGHT_RATIO = 0.92f
 
 /**
  * ST 风格 HTML 消息渲染器
@@ -76,18 +74,12 @@ fun HtmlMessageContent(
 ) {
     val context = LocalContext.current
     val density = LocalDensity.current
-    val configuration = LocalConfiguration.current
     val colorScheme = MaterialTheme.colorScheme
 
-    // 全屏布局 (position:fixed / 100vh / height:100%) 的内容不占文档流,
-    // scrollHeight 测不出真实高度 — 给足默认视口高度
+    // 全屏布局 (100vh/height:100%/fixed) 的界面内部自滚动, 会与聊天列表
+    // 嵌套滚动抢手势 ("划不动") — 解放为自然文档流, 高度=内容全高
     val isFullScreenLayout = remember(content) { FULLSCREEN_LAYOUT_REGEX.containsMatchIn(content) }
-    val initialHeightPx = remember(isFullScreenLayout) {
-        with(density) {
-            (if (isFullScreenLayout) (configuration.screenHeightDp * FULLSCREEN_HEIGHT_RATIO).dp else 96.dp)
-                .toPx().toInt()
-        }
-    }
+    val initialHeightPx = remember { with(density) { 96.dp.toPx().toInt() } }
     var contentHeightPx by remember(content) { mutableIntStateOf(initialHeightPx) }
 
     // 显示层占位符替换 + ```html 栅栏剥离 (ST 渲染行为)
@@ -131,7 +123,7 @@ fun HtmlMessageContent(
                     @JavascriptInterface
                     fun postHeight(height: Int) {
                         if (height > 0) {
-                            post { contentHeightPx = maxOf(height, initialHeightPx) }
+                            post { contentHeightPx = height }
                         }
                     }
                 }, "AndroidHeight")
@@ -157,11 +149,47 @@ fun HtmlMessageContent(
                     override fun onPageFinished(view: WebView, url: String?) {
                         super.onPageFinished(view, url)
                         // 注入高度监听: DOM 变化时回传最新高度
+                        val liberateScript = if (isFullScreenLayout) """
+                                // 解放 100vh/height:100% 布局 -> 自然文档流, 消除内部滚动
+                                function liberate() {
+                                    var vh = window.innerHeight;
+                                    document.documentElement.style.setProperty('height', 'auto', 'important');
+                                    document.documentElement.style.setProperty('overflow', 'visible', 'important');
+                                    if (document.body) {
+                                        document.body.style.setProperty('height', 'auto', 'important');
+                                        document.body.style.setProperty('overflow', 'visible', 'important');
+                                    }
+                                    var els = document.querySelectorAll('*');
+                                    var limit = Math.min(els.length, 800);
+                                    for (var i = 0; i < limit; i++) {
+                                        var el = els[i];
+                                        if (el === document.documentElement || el === document.body) continue;
+                                        var cs = getComputedStyle(el);
+                                        // 容器高度≈视口高 -> 锁视口的滚动容器, 解除
+                                        var h = parseFloat(cs.height);
+                                        if (h > 0 && Math.abs(h - vh) < vh * 0.08) {
+                                            el.style.setProperty('height', 'auto', 'important');
+                                            el.style.setProperty('max-height', 'none', 'important');
+                                            if (cs.overflowY === 'auto' || cs.overflowY === 'scroll' || cs.overflow === 'hidden') {
+                                                el.style.setProperty('overflow', 'visible', 'important');
+                                                el.style.setProperty('overflow-y', 'visible', 'important');
+                                            }
+                                        } else if (cs.overflowY === 'auto' || cs.overflowY === 'scroll') {
+                                            // 非视口高但自滚动的容器也解放
+                                            el.style.setProperty('height', 'auto', 'important');
+                                            el.style.setProperty('max-height', 'none', 'important');
+                                            el.style.setProperty('overflow', 'visible', 'important');
+                                            el.style.setProperty('overflow-y', 'visible', 'important');
+                                        }
+                                    }
+                                }
+                                """ else ""
                         view.evaluateJavascript(
                             """
                             (function() {
                                 var scheduled = false;
                                 var lastHeight = 0;
+                                $liberateScript
                                 function measure() {
                                     var h = Math.max(
                                         document.body ? document.body.scrollHeight : 0,
@@ -190,6 +218,13 @@ fun HtmlMessageContent(
                                 }
                                 if (window.__heightObserverInstalled) { scheduleMeasure(); return; }
                                 window.__heightObserverInstalled = true;
+                                // 先解放全屏滚动容器, 再开始测高
+                                if (typeof liberate === 'function') {
+                                    liberate();
+                                    setTimeout(liberate, 400);
+                                    setTimeout(liberate, 1200);
+                                    setTimeout(liberate, 3000);
+                                }
                                 // ResizeObserver (Tavo 方案): 只在 body 尺寸真正变化时触发,
                                 // CSS transform 动画不触发 -> 不会随动画帧风暴
                                 if (typeof ResizeObserver !== 'undefined') {
