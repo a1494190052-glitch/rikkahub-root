@@ -146,11 +146,16 @@ class ChatService(
     private val templateTransformer: TemplateTransformer,
     private val providerManager: ProviderManager,
     private val localTools: LocalTools,
+    private val subAgentExecutor: me.rerere.rikkahub.data.ai.tools.local.SubAgentExecutor,
+    private val scheduledTaskRepository: me.rerere.rikkahub.service.scheduler.ScheduledTaskRepository,
     val mcpManager: McpManager,
     private val filesManager: FilesManager,
     private val skillManager: SkillManager,
     private val workspaceRepository: WorkspaceRepository,
     private val folderRepository: FolderRepository,
+    private val shellSessionManager: me.rerere.workspace.ShellSessionManager,
+    private val backgroundShellManager: me.rerere.rikkahub.service.shell.BackgroundShellManager,
+    private val shellAuditLogger: me.rerere.rikkahub.service.shell.ShellAuditLogger,
 ) {
     // workspace 系统提示注入 (依赖 workspaceRepository, 故在类内构造)
     private val workspaceReminderTransformer = WorkspaceReminderTransformer(workspaceRepository)
@@ -537,6 +542,18 @@ class ChatService(
                         addAll(createSearchTools(settings))
                     }
                     addAll(localTools.getTools(assistant.localTools))
+                    // 智能体集群: 招聘子代理并行执行子任务 (SubAgentTools.kt)
+                    if (assistant.localTools.contains(me.rerere.rikkahub.data.ai.tools.local.LocalToolOption.SubAgents)) {
+                        add(me.rerere.rikkahub.data.ai.tools.local.buildHireAgentTool(subAgentExecutor, assistant))
+                        add(me.rerere.rikkahub.data.ai.tools.local.buildHireTeamTool(subAgentExecutor, assistant))
+                    }
+                    // 定时任务: AI 主动消息调度 (ScheduleTools.kt)
+                    if (assistant.localTools.contains(me.rerere.rikkahub.data.ai.tools.local.LocalToolOption.Scheduler)) {
+                        add(me.rerere.rikkahub.data.ai.tools.local.buildCreateScheduleTool(scheduledTaskRepository, assistant))
+                        add(me.rerere.rikkahub.data.ai.tools.local.buildListSchedulesTool(scheduledTaskRepository, assistant))
+                        add(me.rerere.rikkahub.data.ai.tools.local.buildDeleteScheduleTool(scheduledTaskRepository, assistant))
+                        add(me.rerere.rikkahub.data.ai.tools.local.buildToggleScheduleTool(scheduledTaskRepository, assistant))
+                    }
                     if (assistant.enableRecentChatsReference) {
                         addAll(createConversationTools(conversationRepo, assistant.id))
                     }
@@ -648,7 +665,14 @@ class ChatService(
             )
             return emptyList()
         }
-        return createWorkspaceTools(workspaceId, workspaceRepository, cwd)
+        return createWorkspaceTools(
+            workspaceId = workspaceId,
+            workspaceRepository = workspaceRepository,
+            cwd = cwd,
+            shellSessionManager = shellSessionManager,
+            backgroundShellManager = backgroundShellManager,
+            shellAuditLogger = shellAuditLogger,
+        )
     }
 
     // ---- 检查无效消息 ----

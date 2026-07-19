@@ -240,6 +240,34 @@ private fun AssistantLocalToolContent(
                     )
                 }
             )
+            item(
+                headlineContent = {
+                    Text(stringResource(R.string.assistant_page_local_tools_sub_agents_title))
+                },
+                supportingContent = {
+                    Text(stringResource(R.string.assistant_page_local_tools_sub_agents_desc))
+                },
+                trailingContent = {
+                    Switch(
+                        checked = assistant.localTools.contains(LocalToolOption.SubAgents),
+                        onCheckedChange = { toggleLocalTool(LocalToolOption.SubAgents, it) }
+                    )
+                }
+            )
+            item(
+                headlineContent = {
+                    Text(stringResource(R.string.assistant_page_local_tools_scheduler_title))
+                },
+                supportingContent = {
+                    Text(stringResource(R.string.assistant_page_local_tools_scheduler_desc))
+                },
+                trailingContent = {
+                    Switch(
+                        checked = assistant.localTools.contains(LocalToolOption.Scheduler),
+                        onCheckedChange = { toggleLocalTool(LocalToolOption.Scheduler, it) }
+                    )
+                }
+            )
         }
     }
 }

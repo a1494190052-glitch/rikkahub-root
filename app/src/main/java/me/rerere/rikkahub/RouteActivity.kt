@@ -93,6 +93,8 @@ import me.rerere.rikkahub.ui.pages.debug.DebugPage
 import me.rerere.rikkahub.ui.pages.extensions.ExtensionsPage
 import me.rerere.rikkahub.ui.pages.extensions.PromptPage
 import me.rerere.rikkahub.ui.pages.extensions.QuickMessagesPage
+import me.rerere.rikkahub.ui.pages.extensions.ScheduledTasksPage
+import me.rerere.rikkahub.ui.pages.extensions.ShellAuditPage
 import me.rerere.rikkahub.ui.pages.extensions.skills.SkillDetailPage
 import me.rerere.rikkahub.ui.pages.extensions.skills.SkillsPage
 import me.rerere.rikkahub.ui.pages.extensions.workspace.WorkspacePage
@@ -490,6 +492,13 @@ class RouteActivity : ComponentActivity() {
                                 QuickMessagesPage()
                             }
 
+                            entry<Screen.ScheduledTasks> {
+                                ScheduledTasksPage()
+                            }
+                            entry<Screen.ShellAudit> {
+                                ShellAuditPage()
+                            }
+
                             entry<Screen.Prompts> {
                                 PromptPage()
                             }
@@ -691,6 +700,12 @@ sealed interface Screen : NavKey {
 
     @Serializable
     data object QuickMessages : Screen
+
+    @Serializable
+    data object ScheduledTasks : Screen
+
+    @Serializable
+    data object ShellAudit : Screen
 
     @Serializable
     data object Prompts : Screen

@@ -30,6 +30,8 @@ import me.rerere.rikkahub.data.db.migrations.Migration_11_12
 import me.rerere.rikkahub.data.db.migrations.Migration_13_14
 import me.rerere.rikkahub.data.db.migrations.Migration_14_15
 import me.rerere.rikkahub.data.db.migrations.Migration_15_16
+import me.rerere.rikkahub.data.db.migrations.Migration_24_25
+import me.rerere.rikkahub.data.db.migrations.Migration_25_26
 import me.rerere.rikkahub.data.ai.mcp.McpManager
 import me.rerere.rikkahub.data.sync.webdav.WebDavSync
 import me.rerere.search.SearchService
@@ -52,7 +54,7 @@ val dataSourceModule = module {
         val context: Context = get()
         Room.databaseBuilder(context, AppDatabase::class.java, "rikka_hub")
             .setJournalMode(RoomDatabase.JournalMode.WRITE_AHEAD_LOGGING)
-            .addMigrations(Migration_6_7, Migration_11_12, Migration_13_14, Migration_14_15, Migration_15_16)
+            .addMigrations(Migration_6_7, Migration_11_12, Migration_13_14, Migration_14_15, Migration_15_16, Migration_24_25, Migration_25_26)
             .addCallback(object : RoomDatabase.Callback() {
                 override fun onOpen(db: SupportSQLiteDatabase) {
                     val dictDir = SimpleDictManager.extractDict(context)
@@ -158,6 +160,34 @@ val dataSourceModule = module {
             providerManager = get(),
             json = get(),
             memoryRepo = get()
+        )
+    }
+
+    single {
+        me.rerere.rikkahub.data.ai.tools.local.SubAgentExecutor(
+            settingsStore = get(),
+            generationHandler = get(),
+            localTools = get(),
+        )
+    }
+
+    single { get<AppDatabase>().scheduledTaskDao() }
+
+    single {
+        me.rerere.rikkahub.service.scheduler.ScheduledTaskRepository(
+            context = get(),
+            dao = get(),
+        )
+    }
+
+    single {
+        me.rerere.rikkahub.service.scheduler.ScheduledTaskExecutor(
+            context = get(),
+            settingsStore = get(),
+            providerManager = get(),
+            scheduledTaskDao = get(),
+            conversationRepo = get(),
+            auditLogger = get(),
         )
     }
 

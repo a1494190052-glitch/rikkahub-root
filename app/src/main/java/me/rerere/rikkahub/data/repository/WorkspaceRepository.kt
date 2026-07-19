@@ -174,6 +174,23 @@ class WorkspaceRepository(
     }
 
     /**
+     * 按存储区写文本（直接文件 IO）。
+     * 与 fileSize/exportFile 同路径，root 模式下也写到 workspace 目录内，
+     * 不会像 rootfs shell 命令那样落到宿主机真实路径。
+     */
+    suspend fun writeTextInArea(
+        id: String,
+        area: WorkspaceStorageArea,
+        path: String,
+        text: String,
+        overwrite: Boolean,
+    ): WorkspaceFileEntry = withContext(Dispatchers.IO) {
+        val workspace = dao.getById(id) ?: error("Workspace not found: $id")
+        manager.ensureWorkspace(workspace.root)
+        manager.writeTextInArea(workspace.root, path, text, overwrite, area)
+    }
+
+    /**
      * 读取文本用于应用内预览/编辑, 支持两个存储区.
      * FILES 区走 [WorkspaceManager.readText] (自带大小保护); LINUX 区通过 exportFile 读入内存,
      * 因此这里对 LINUX 区显式做大小限制, 避免大文件撑爆内存.
@@ -270,10 +287,45 @@ class WorkspaceRepository(
         }
     }
 
+    // ---- 快照(纯文件备份, 不依赖 git) ----
+
+    private val snapshotManager by lazy { me.rerere.workspace.SnapshotManager() }
+
+    suspend fun createSnapshot(id: String, label: String?): me.rerere.workspace.WorkspaceSnapshot =
+        withContext(Dispatchers.IO) {
+            val workspace = dao.getById(id) ?: error("Workspace not found: $id")
+            snapshotManager.create(manager.workspaceDir(workspace.root), label)
+        }
+
+    suspend fun listSnapshots(id: String): List<me.rerere.workspace.WorkspaceSnapshot> =
+        withContext(Dispatchers.IO) {
+            val workspace = dao.getById(id) ?: error("Workspace not found: $id")
+            snapshotManager.list(manager.workspaceDir(workspace.root))
+        }
+
+    /** 恢复快照(恢复前自动打 pre-restore 保险快照) */
+    suspend fun restoreSnapshot(id: String, name: String): me.rerere.workspace.WorkspaceSnapshot =
+        withContext(Dispatchers.IO) {
+            val workspace = dao.getById(id) ?: error("Workspace not found: $id")
+            snapshotManager.restore(manager.workspaceDir(workspace.root), name)
+        }
+
+    suspend fun deleteSnapshot(id: String, name: String): Boolean =
+        withContext(Dispatchers.IO) {
+            val workspace = dao.getById(id) ?: error("Workspace not found: $id")
+            snapshotManager.delete(manager.workspaceDir(workspace.root), name)
+        }
+
     suspend fun delete(id: String): Boolean {
         val workspace = dao.getById(id) ?: return false
         dao.deleteById(id)
         withContext(Dispatchers.IO) {
+            // 先关掉该工作区的持久 shell 会话, 避免进程残留指向已删目录
+            runCatching {
+                org.koin.java.KoinJavaComponent.getKoin()
+                    .get<me.rerere.workspace.ShellSessionManager>()
+                    .close(workspace.root)
+            }
             manager.deleteWorkspace(workspace.root)
         }
         cleanupAssistantReferences(id)

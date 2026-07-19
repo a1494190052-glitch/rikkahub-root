@@ -477,6 +477,14 @@ class FilesManager(
     fun getFileMimeType(uri: Uri): String? =
         FileUtils.getFileMimeType(context, uri)
 
+    /** 查询 Uri 指向文件的大小(字节); 查不到返回 null */
+    fun getFileSize(uri: Uri): Long? = runCatching {
+        context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+            val idx = cursor.getColumnIndex(android.provider.OpenableColumns.SIZE)
+            if (idx >= 0 && cursor.moveToFirst()) cursor.getLong(idx) else null
+        }
+    }.getOrNull()
+
     private fun guessMimeType(file: File, fileName: String): String =
         FileUtils.guessMimeType(file, fileName)
 }

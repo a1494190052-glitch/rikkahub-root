@@ -454,6 +454,19 @@ private fun TextInputRow(
             }
         }
 
+        // Quick Replies 快捷回复按钮栏 (对齐 SillyTavern QR 体验):
+        // 单击填入输入框, 长按震动并直接发送; 有快捷消息时才显示
+        if (quickMessages.isNotEmpty()) {
+            QuickRepliesBar(
+                quickMessages = quickMessages,
+                onFill = { state.appendText(it) },
+                onSend = {
+                    state.appendText(it)
+                    onSendMessage()
+                },
+            )
+        }
+
         var isFocused by remember { mutableStateOf(false) }
         var isFullScreen by remember { mutableStateOf(false) }
         var completionList by remember { mutableStateOf<ChatCompletionList?>(null) }
@@ -673,6 +686,51 @@ private fun ChatInputState.applyCompletion(
     textContent.edit {
         replace(start, end, item.insertText)
         selection = TextRange(start + item.insertText.length)
+    }
+}
+
+/**
+ * Quick Replies 快捷回复按钮栏（输入框上方的横滑胶囊条）
+ * 单击 = 填入输入框；长按 = 直接发送（带震动反馈）
+ */
+@Composable
+private fun QuickRepliesBar(
+    quickMessages: List<QuickMessage>,
+    onFill: (String) -> Unit,
+    onSend: (String) -> Unit,
+) {
+    val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
+    androidx.compose.foundation.lazy.LazyRow(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        items(
+            count = quickMessages.size,
+            key = { quickMessages[it].id.toString() },
+        ) { index ->
+            val qm = quickMessages[index]
+            Surface(
+                shape = RoundedCornerShape(50),
+                color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.75f),
+                modifier = Modifier.combinedClickable(
+                    // 关闭默认长按震动, 与下方手动反馈去重(否则长按震两次)
+                    hapticFeedbackEnabled = false,
+                    onClick = { onFill(qm.content) },
+                    onLongClick = {
+                        haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+                        onSend(qm.content)
+                    },
+                ),
+            ) {
+                Text(
+                    text = qm.title.ifBlank { qm.content },
+                    style = MaterialTheme.typography.labelMedium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                )
+            }
+        }
     }
 }
 

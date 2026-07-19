@@ -241,6 +241,7 @@
   <string name="chat_input_placeholder">Chat with AI</string>
   <string name="chat_input_unsupported_file_type">Unsupported file type: %s</string>
   <string name="chat_input_file_read_failed">Failed to read file: %s</string>
+  <string name="chat_input_file_too_large">File too large: %1$s (%2$dMB, max 100MB)</string>
   <string name="chat_message_add_favorite">Add Favorite</string>
   <string name="chat_message_remove_favorite">Remove Favorite</string>
   <string name="chat_message_tool_approve">Approve</string>
@@ -1291,6 +1292,8 @@
   <string name="workspace_page_root_mode_desc">Run workspace shell commands on the host system with root privileges (via su), bypassing the proot container. Affects both the AI workspace_shell tool and the workspace terminal. Dangerous, enable with caution.</string>
   <string name="assistant_page_local_tools_root_shell_title">Root Shell</string>
   <string name="assistant_page_local_tools_root_shell_desc">Let the AI run shell commands on the host system with root privileges (via su). Requires a rooted device. Dangerous, enable with caution.</string>
+  <string name="assistant_page_local_tools_sub_agents_title">Agent Swarm</string>
+  <string name="assistant_page_local_tools_sub_agents_desc">Let the AI hire sub-agents (hire_agent / hire_team) to work on independent subtasks in parallel and merge their reports. Sub-agents use the fast model by default and inherit enabled tools.</string>
   <string name="chat_message_tool_calendar_query">Query calendar events</string>
   <string name="chat_message_tool_calendar_create">Create event: %1$s</string>
   <string name="chat_page_move_to_folder">Move to Folder</string>
@@ -1304,4 +1307,36 @@
   <string name="chat_page_folder_add">New</string>
   <string name="chat_page_delete_folder_confirm">Delete folder "%1$s"? Conversations inside will not be deleted, only removed from the folder.</string>
   <string name="chat_page_delete_folder_generating">Some conversations in this folder are still generating. Please stop them before deleting.</string>
+  <string name="scheduled_tasks_page_title">Scheduled Tasks</string>
+  <string name="scheduled_tasks_empty">No scheduled tasks yet. Tap the button below to create one, or just tell the AI: "remind me every day at 8am" (requires the Scheduled Tasks tool enabled on the assistant)</string>
+  <string name="scheduled_tasks_new">New Task</string>
+  <string name="scheduled_tasks_create">Create</string>
+  <string name="scheduled_tasks_field_title">Task name</string>
+  <string name="scheduled_tasks_field_prompt">Prompt sent to AI at trigger time</string>
+  <string name="scheduled_tasks_field_assistant">Select assistant</string>
+  <string name="scheduled_tasks_field_time">Time (HH:mm)</string>
+  <string name="scheduled_tasks_field_weekdays">Weekdays (1=Mon..7=Sun, comma separated)</string>
+  <string name="scheduled_tasks_field_interval">Interval minutes (>=15)</string>
+  <string name="scheduled_tasks_type_daily">Daily</string>
+  <string name="scheduled_tasks_type_weekly">Weekly</string>
+  <string name="scheduled_tasks_type_interval">Interval</string>
+  <string name="scheduled_tasks_next">Next</string>
+  <string name="extensions_page_scheduled_tasks">Scheduled Tasks</string>
+  <string name="extensions_page_scheduled_tasks_desc">Proactive AI messages: reminders, daily briefings, recurring jobs</string>
+  <string name="notification_channel_scheduled_task">Scheduled Messages</string>
+  <string name="assistant_page_local_tools_scheduler_title">Scheduled Tasks (Proactive)</string>
+  <string name="assistant_page_local_tools_scheduler_desc">Let the AI create scheduled tasks (create_schedule / list / delete / toggle) and proactively message you at the scheduled time, posted to a conversation with a notification</string>
+  <string name="scheduled_tasks_action_llm">AI Message</string>
+  <string name="scheduled_tasks_action_shell">Shell Command</string>
+  <string name="scheduled_tasks_field_shell_command">Shell command (runs as root)</string>
+  <string name="shell_audit_page_title">Shell Log</string>
+  <string name="shell_audit_empty">No shell commands recorded yet. Commands run by the AI (workspace/root/background) will appear here.</string>
+  <string name="shell_audit_clear">Clear all</string>
+  <string name="shell_audit_kill">Kill</string>
+  <string name="shell_audit_source_workspace">Workspace</string>
+  <string name="shell_audit_source_root">Root</string>
+  <string name="shell_audit_source_background">Background</string>
+  <string name="shell_audit_source_scheduled">Scheduled</string>
+  <string name="extensions_page_shell_audit">Shell Log</string>
+  <string name="extensions_page_shell_audit_desc">Audit every shell command the AI runs on your device</string>
 </resources>

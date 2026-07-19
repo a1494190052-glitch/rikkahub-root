@@ -66,6 +66,21 @@ class WorkspaceManager(
         charset: Charset = StandardCharsets.UTF_8,
     ): WorkspaceFileEntry = fileSystem.writeText(filesDir(root), path, text, overwrite, charset)
 
+    /**
+     * 按存储区写文件（直接文件 IO，不经过 shell）。
+     * root 模式下 executeCommand 在宿主机真 root 环境执行，shell 写入会落到
+     * 错误位置（宿主机真实路径而非 workspace 目录），因此写操作必须走文件 IO，
+     * 与 fileSize/exportFile 的读取路径保持一致。
+     */
+    fun writeTextInArea(
+        root: String,
+        path: String,
+        text: String,
+        overwrite: Boolean = true,
+        area: WorkspaceStorageArea = WorkspaceStorageArea.FILES,
+        charset: Charset = StandardCharsets.UTF_8,
+    ): WorkspaceFileEntry = fileSystem.writeText(areaDir(root, area), path, text, overwrite, charset)
+
     fun importFile(
         root: String,
         destinationPath: String,

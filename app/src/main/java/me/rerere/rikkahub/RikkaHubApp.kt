@@ -79,6 +79,12 @@ class RikkaHubApp : Application() {
         }
         this.createNotificationChannel()
 
+        // WorkManager 默认 initializer 已在 manifest 移除(配合 koin workManagerFactory),
+        // 但定时任务 Worker 直接调 WorkManager.getInstance, 需确保已初始化; 重复调用会抛异常故 runCatching
+        runCatching {
+            androidx.work.WorkManager.initialize(this, androidx.work.Configuration.Builder().build())
+        }
+
         // set cursor window size to 32MB
         DatabaseUtil.setCursorWindowSize(32 * 1024 * 1024)
 
@@ -108,10 +114,41 @@ class RikkaHubApp : Application() {
         startFloatingTaskServiceIfEnabled()
         seedRootPresetAssistant()
 
+        // 定时任务: 启动时重排（闹钟不持久化，可能被系统清除）
+        rescheduleScheduledTasks()
+
+        // 持久 shell 会话: 定期回收空闲会话(防 su/proot 进程泄漏)
+        startShellSessionReaper()
+
         // Increment launch count
         incrementLaunchCount()
 
         // Composer.setDiagnosticStackTraceMode(ComposeStackTraceMode.Auto)
+    }
+
+    private fun startShellSessionReaper() {
+        get<AppScope>().launch(Dispatchers.IO) {
+            while (true) {
+                kotlinx.coroutines.delay(5 * 60 * 1000L)
+                runCatching {
+                    get<me.rerere.workspace.ShellSessionManager>().reapIdleSessions()
+                }
+            }
+        }
+    }
+
+    private fun rescheduleScheduledTasks() {
+        get<AppScope>().launch(Dispatchers.IO) {
+            runCatching {
+                val repo = get<me.rerere.rikkahub.service.scheduler.ScheduledTaskRepository>()
+                me.rerere.rikkahub.service.scheduler.TaskScheduler.rescheduleAllWithCleanup(
+                    this@RikkaHubApp,
+                    repo
+                )
+            }.onFailure {
+                Log.e(TAG, "rescheduleScheduledTasks failed", it)
+            }
+        }
     }
 
     private fun incrementLaunchCount() {
@@ -291,6 +328,17 @@ class RikkaHubApp : Application() {
             .setShowBadge(false)
             .build()
         notificationManager.createNotificationChannel(webServerChannel)
+
+        // 定时任务主动消息渠道 (高重要性: 主动消息需要提醒)
+        val scheduledTaskChannel = NotificationChannelCompat
+            .Builder(
+                me.rerere.rikkahub.service.scheduler.SCHEDULED_TASK_NOTIFICATION_CHANNEL_ID,
+                NotificationManagerCompat.IMPORTANCE_HIGH
+            )
+            .setName(getString(R.string.notification_channel_scheduled_task))
+            .setVibrationEnabled(true)
+            .build()
+        notificationManager.createNotificationChannel(scheduledTaskChannel)
     }
 
     override fun onTerminate() {

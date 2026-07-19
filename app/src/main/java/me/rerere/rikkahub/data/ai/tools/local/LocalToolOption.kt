@@ -36,4 +36,12 @@ sealed class LocalToolOption {
     @Serializable
     @SerialName("root_shell")
     data object RootShell : LocalToolOption()
+
+    @Serializable
+    @SerialName("sub_agents")
+    data object SubAgents : LocalToolOption()
+
+    @Serializable
+    @SerialName("scheduler")
+    data object Scheduler : LocalToolOption()
 }
