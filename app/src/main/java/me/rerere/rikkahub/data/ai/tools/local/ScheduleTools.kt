@@ -185,9 +185,10 @@ internal fun buildDeleteScheduleTool(repo: ScheduledTaskRepository, assistant: A
         when {
             matches.isEmpty() -> return@Tool listOf(UIMessagePart.Text("未找到任务: $id"))
             matches.size > 1 -> return@Tool listOf(
-                UIMessagePart.Text("id 前缀匹配到 ${matches.size} 个任务，请提供更长的 id：
-" + matches.joinToString("
-") { formatTask(it) })
+                UIMessagePart.Text(
+                    "id 前缀匹配到 ${matches.size} 个任务，请提供更长的 id：\n" +
+                        matches.joinToString("\n") { formatTask(it) }
+                )
             )
         }
         val task = matches.first()
