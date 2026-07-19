@@ -37,6 +37,7 @@ data class ShellAuditEntity(
         const val SOURCE_AI_WORKSPACE = "ai_workspace"
         const val SOURCE_AI_ROOT = "ai_root"
         const val SOURCE_AI_BACKGROUND = "ai_background"
+        const val SOURCE_AI_PTY = "ai_pty"
         const val SOURCE_SCHEDULED_TASK = "scheduled_task"
     }
 }

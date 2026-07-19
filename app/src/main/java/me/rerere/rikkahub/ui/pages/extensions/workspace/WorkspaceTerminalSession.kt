@@ -20,11 +20,15 @@ import me.rerere.workspace.RootfsPatchOptions
 import me.rerere.workspace.RootfsPatcher
 import java.io.File
 
-internal fun createWorkspaceTerminalSession(
-    context: Context,
-    root: String,
-    client: TerminalSessionClient,
-): TerminalSession {
+/** proot 启动参数包: 用户侧终端页与 AI 无头 PTY (pty_exec) 共用 */
+internal data class ProotLaunch(
+    val shellPath: String,
+    val cwd: String,
+    val args: Array<String>,
+    val env: Array<String>,
+)
+
+internal fun buildWorkspaceProotLaunch(context: Context, root: String): ProotLaunch {
     val appContext = context.applicationContext
     val workspaceDir = File(File(appContext.filesDir, "workspaces"), root)
     val filesDir = File(workspaceDir, "files")
@@ -73,11 +77,20 @@ internal fun createWorkspaceTerminalSession(
         "TMPDIR=${tempDir.absolutePath}",
     )
 
+    return ProotLaunch(proot.absolutePath, filesDir.absolutePath, args.toTypedArray(), env)
+}
+
+internal fun createWorkspaceTerminalSession(
+    context: Context,
+    root: String,
+    client: TerminalSessionClient,
+): TerminalSession {
+    val launch = buildWorkspaceProotLaunch(context, root)
     return TerminalSession(
-        proot.absolutePath,
-        filesDir.absolutePath,
-        args.toTypedArray(),
-        env,
+        launch.shellPath,
+        launch.cwd,
+        launch.args,
+        launch.env,
         2_000,
         client,
     ).apply {

@@ -267,6 +267,7 @@ private fun createShellTool(
         if (shellSessionManager != null) {
             append("Commands run in a PERSISTENT shell session: cd, exported variables and background processes (&) carry over between calls. ")
             append("Omit cwd to stay in the current directory (the response includes the current cwd). Do not run interactive commands that read stdin (e.g. read, top without -n). ")
+            append("For prompt-driven interaction (ssh password login, sudo password, REPLs, apt confirmations) use the pty_exec tool if it is available. ")
         } else {
             append("Use cwd for a path relative to the workspace files root. ")
         }

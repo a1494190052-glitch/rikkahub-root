@@ -187,7 +187,7 @@ internal fun buildHireAgentTool(executor: SubAgentExecutor, parent: Assistant): 
     description = """
         Hire ONE sub-agent (independent AI worker) to complete a subtask autonomously.
         The sub-agent has a clean context (CANNOT see this conversation) and inherits your enabled LOCAL tools only
-        (shell, workspace files, memory, schedule etc. — NO web search, MCP, or other remote tools).
+        (shell, workspace files, memory, schedule etc. — NO web search, MCP, pty_exec, or other remote/approval-gated tools).
         Local tools requiring user approval will dead-end inside a sub-agent (no one can approve);
         write tasks so read-only/auto-approved tools suffice.
         Use for decomposable work: research from multiple angles, drafting sections, comparing options.

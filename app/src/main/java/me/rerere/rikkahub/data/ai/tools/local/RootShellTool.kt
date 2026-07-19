@@ -35,6 +35,14 @@ internal fun buildRootShellTool(
             Commands run in a PERSISTENT root shell session: cd, exported variables and
             background processes (&) carry over between calls (pass fresh=true for a one-shot process).
             The response includes the session's current cwd.
+            INTERACTIVE & REMOTE patterns: (1) ssh with KEY auth works here: run
+            `ssh -i KEYFILE -o StrictHostKeyChecking=accept-new user@host` once in this session —
+            afterwards your commands run on the REMOTE host (reported exitCode/cwd follow the
+            remote shell; `exit` returns to local). (2) sudo reads passwords from the tty, not stdin;
+            pipe it instead: `echo 'password' | sudo -S cmd`. (3) NEVER launch full-screen TUI apps
+            (vim, nano, htop, top, less) — edit files non-interactively (sed, awk, cat <<'EOF' > file).
+            (4) For password-based ssh or any prompt-driven interaction (REPL, apt confirmations),
+            use the pty_exec tool instead — it drives a real terminal with expect/respond steps.
             This is powerful and dangerous: always explain to the user what a command does
             before running anything destructive. Dangerous commands may be blocked by a safety guard.
         """.trimIndent().replace("\n", " "),
