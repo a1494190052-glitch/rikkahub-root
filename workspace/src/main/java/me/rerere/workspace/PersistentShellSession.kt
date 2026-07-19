@@ -196,9 +196,16 @@ class PersistentShellSession private constructor(
         synchronized(lock) { lock.notifyAll() }
     }
 
+    /** 读取进程 pid: Process.pid() 是 Java 9 API 在 desugar 链不可用, 反射 ProcessImpl.pid 字段 */
+    private fun readProcessPid(): Int? = runCatching {
+        val field = process.javaClass.getDeclaredField("pid")
+        field.isAccessible = true
+        field.getInt(process).takeIf { it > 0 }
+    }.getOrNull()
+
     /** 用 root 权限递归杀进程树(仅 su 会话兜底用) */
     private fun killTreeAsRoot() {
-        val pid = runCatching { process.pid() }.getOrNull() ?: return
+        val pid = readProcessPid() ?: return
         // /proc/<pid>/stat 第 4 列是 ppid; comm 列可能含空格, 用 ')' 之后的内容解析更稳
         val script = """
             killtree() {
