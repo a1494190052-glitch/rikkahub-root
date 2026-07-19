@@ -13,6 +13,7 @@ class LocalTools(
     private val settingsStore: SettingsStore,
     private val shellSessionManager: me.rerere.workspace.ShellSessionManager? = null,
     private val shellAuditLogger: me.rerere.rikkahub.service.shell.ShellAuditLogger? = null,
+    private val ptySessionManager: me.rerere.rikkahub.service.shell.PtySessionManager? = null,
     private val isSubAgent: Boolean = false,
 ) {
     val javascriptTool by lazy { buildJavascriptTool() }
@@ -35,13 +36,17 @@ class LocalTools(
 
     val ptyExecTool by lazy { buildPtyExecTool(context, shellAuditLogger) }
 
+    val ptySessionTool by lazy {
+        ptySessionManager?.let { buildPtySessionTool(context, it, shellAuditLogger) }
+    }
+
     /**
      * 子代理专用实例: 不带持久 shell 会话, root_shell 强制走一次性进程。
      * 并行子代理若共享 host_root 持久会话会互相污染 cwd / 环境变量。
-     * 同时排除 pty_exec: 它强制人工审批, 子代理拿不到审批会卡死。
+     * 同时排除 pty_exec 和 pty_session: 强制人工审批, 子代理拿不到审批会卡死。
      */
     fun forSubAgent(): LocalTools =
-        LocalTools(context, eventBus, ttsManager, settingsStore, null, shellAuditLogger, isSubAgent = true)
+        LocalTools(context, eventBus, ttsManager, settingsStore, null, shellAuditLogger, null, isSubAgent = true)
 
     val rootScreenshotTool by lazy { buildRootScreenshotTool(context) }
 
@@ -75,6 +80,7 @@ class LocalTools(
             tools.add(rootShellTool)
             if (!isSubAgent) {
                 tools.add(ptyExecTool)
+                ptySessionTool?.let { tools.add(it) }
             }
             tools.add(rootScreenshotTool)
             tools.add(uiTreeTool)

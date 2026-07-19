@@ -31,7 +31,7 @@ val appModule = module {
     }
 
     single {
-        LocalTools(get(), get(), get(), get(), get(), get())
+        LocalTools(get(), get(), get(), get(), get(), get(), get())
     }
 
     // 持久 Shell 会话注册表(workspace/root 复用, 空闲自动回收)
@@ -63,6 +63,11 @@ val appModule = module {
     // Shell 审计日志
     single {
         me.rerere.rikkahub.service.shell.ShellAuditLogger(get<me.rerere.rikkahub.data.db.AppDatabase>().shellAuditDao())
+    }
+
+    // 持久 PTY 会话组管理器 (L2: AI 多轮交互终端)
+    single {
+        me.rerere.rikkahub.service.shell.PtySessionManager(context = get())
     }
 
     // 后台 Shell 任务管理器

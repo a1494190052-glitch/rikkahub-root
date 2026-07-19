@@ -77,20 +77,52 @@ class HeadlessPty(
         }
     }
 
-    /** 必须在带 Looper 的线程构造 TerminalSession (内部创建 Handler) */
-    private suspend fun start() = withContext(Dispatchers.Main) {
+    // ============================================================
+    //  L2: 公开原语 (pty_session 持久会话使用, runExpect 也走这套)
+    // ============================================================
+
+    /** 启动 PTY: 必须在带 Looper 的线程构造 TerminalSession (内部创建 Handler) */
+    suspend fun open() = withContext(Dispatchers.Main) {
         val created = TerminalSession(shellPath, cwd, args, env, TRANSCRIPT_ROWS, client)
         created.mSessionName = "pty_exec"
         created.updateSize(COLUMNS, ROWS) // mEmulator 为空时会 initializeEmulator 并拉起进程
         session = created
+        // 等待 settle + PID 探测 (su 子树兜底清理需要)
+        withContext(Dispatchers.IO) {
+            delay(SETTLE_MS)
+            sendRaw(PID_CMD)
+            val pidDeadline = System.currentTimeMillis() + PID_PROBE_MS
+            waitForPattern(PID_PATTERN, pidDeadline)?.let { shellPid = it.toIntOrNull() ?: -1 }
+        }
     }
 
-    private fun writeRaw(text: String) {
+    /** 向 PTY 发送文本 (自动补换行) */
+    suspend fun send(text: String) {
+        sendRaw(if (text.endsWith("\n")) text else text + "\n")
+    }
+
+    /** 底层写原始字节 */
+    internal fun sendRaw(text: String) {
         val bytes = text.toByteArray(Charsets.UTF_8)
         session?.write(bytes, 0, bytes.size)
     }
 
-    /** 屏幕文本: maxRows 限制时只取底部窗口(transcript+屏幕), 否则全量 */
+    /** 读取屏幕文本: maxRows 限制时只取底部窗口(transcript+屏幕), Int.MAX_VALUE=全量 */
+    fun readScreen(maxRows: Int = Int.MAX_VALUE): String = screenText(maxRows)
+
+    /** 等待 pattern 出现在屏幕尾部窗口, 返回首个捕获组; 超时/会话死亡返回 null */
+    suspend fun waitPattern(pattern: Pattern, timeoutMillis: Long): String? {
+        val deadline = System.currentTimeMillis() + timeoutMillis
+        return waitForPattern(pattern, deadline)
+    }
+
+    /** 关闭 PTY 会话 */
+    suspend fun close() = destroy()
+
+    // ============================================================
+    //  L1: runExpect 兼容层 (pty_exec 回归底线, 行为不变)
+    // ============================================================
+
     private fun screenText(maxRows: Int): String {
         val emu = session?.emulator ?: return ""
         val screen = emu.screen ?: return ""
@@ -112,7 +144,7 @@ class HeadlessPty(
     /**
      * 轮询屏幕尾部窗口直到 pattern 命中, 返回首个捕获组; 超时/会话死亡返回 null.
      */
-    private suspend fun waitFor(pattern: Pattern, deadline: Long): String? {
+    internal suspend fun waitForPattern(pattern: Pattern, deadline: Long): String? {
         while (true) {
             val matcher = pattern.matcher(screenText(POLL_WINDOW_ROWS))
             if (matcher.find()) {
@@ -137,20 +169,14 @@ class HeadlessPty(
         timeoutMillis: Long,
     ): PtyResult {
         val deadline = System.currentTimeMillis() + timeoutMillis
-        start()
+        open()
         try {
-            delay(SETTLE_MS)
-            writeRaw(PID_CMD)
-            // pid 探测只给小窗口: 失败不致命(仅影响 su 子树兜底清理), 不能吃掉总预算
-            val pidDeadline = minOf(deadline, System.currentTimeMillis() + PID_PROBE_MS)
-            waitFor(PID_PATTERN, pidDeadline)?.let { shellPid = it.toIntOrNull() ?: -1 }
-
-            writeRaw(command + "\n")
+            sendRaw(command + "\n")
             var matched = 0
             for ((pattern, send) in expects) {
-                waitFor(pattern, deadline)
+                waitForPattern(pattern, deadline)
                     ?: return buildResult(exitCode = -1, matched = matched, timedOut = true)
-                writeRaw(if (send.endsWith("\n")) send else send + "\n")
+                sendRaw(if (send.endsWith("\n")) send else send + "\n")
                 matched++
             }
 
@@ -160,8 +186,8 @@ class HeadlessPty(
                 }
                 append(DONE_CMD)
             }
-            writeRaw(tailCmd)
-            val exitText = waitFor(DONE_PATTERN, deadline)
+            sendRaw(tailCmd)
+            val exitText = waitForPattern(DONE_PATTERN, deadline)
                 ?: return buildResult(exitCode = -1, matched = matched, timedOut = true)
             delay(OUTPUT_DRAIN_MS) // 给标记后的尾输出一点落屏时间
             return buildResult(exitCode = exitText.toIntOrNull() ?: -1, matched = matched, timedOut = false)
