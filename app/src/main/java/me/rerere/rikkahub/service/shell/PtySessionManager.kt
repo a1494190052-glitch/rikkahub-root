@@ -104,14 +104,6 @@ class PtySessionManager(
         return entry
     }
 
-    suspend fun reapIdle(idleTimeoutMs: Long = IDLE_TIMEOUT_MS): Int {
-        val now = System.currentTimeMillis()
-        val stale = byId.values.filter { now - it.lastUsedAt > idleTimeoutMs }
-        stale.forEach { closeById(it.id) }
-        if (stale.isNotEmpty()) Log.i(TAG, "reaped ${stale.size} idle sessions")
-        return stale.size
-    }
-
     suspend fun closeAll() { byId.keys.toList().forEach { closeById(it) } }
 
     companion object {
