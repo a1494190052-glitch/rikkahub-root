@@ -62,18 +62,19 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       # ── Android SDK 缓存 ──
+      # runner 预装 SDK 在 $ANDROID_HOME (=/usr/local/lib/android/sdk)，
+      # 只缓存我们显式安装的组件（NDK ~1GB 是下载大头）
       - name: Cache Android SDK
         uses: actions/cache@v4
         with:
           path: |
-            ~/.android/Sdk/platforms
-            ~/.android/Sdk/build-tools
-            ~/.android/Sdk/ndk
-            ~/.android/Sdk/platform-tools
-            ~/.android/Sdk/cmdline-tools
-          key: android-sdk-${{ runner.os }}-${{ hashFiles('.github/workflows/daily-build.yml') }}
+            ${{ env.ANDROID_HOME }}/platforms/android-37*
+            ${{ env.ANDROID_HOME }}/build-tools/36.0.0
+            ${{ env.ANDROID_HOME }}/build-tools/36.1.0
+            ${{ env.ANDROID_HOME }}/ndk
+          key: android-sdk-v1-${{ runner.os }}
           restore-keys: |
-            android-sdk-${{ runner.os }}-
+            android-sdk-
 
       - name: Install Android SDK components
         run: |
