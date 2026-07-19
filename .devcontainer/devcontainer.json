@@ -1,31 +1,38 @@
 {
-  "name": "RikkaHub 8-Core Build",
-  "image": "mcr.microsoft.com/devcontainers/base:ubuntu-24.04",
+  "name": "RikkaHub Root Build",
+  "image": "mcr.microsoft.com/devcontainers/universal:2",
+  "hostRequirements": {
+    "cpus": 8,
+    "memory": "16gb",
+    "storage": "64gb"
+  },
   "features": {
+    "ghcr.io/devcontainers/features/android-sdk:1": {
+      "platforms": "platforms;android-37",
+      "buildTools": "build-tools;36.0.0 build-tools;36.1.0"
+    },
     "ghcr.io/devcontainers/features/java:1": {
       "version": "17",
-      "installMaven": false,
-      "installGradle": false
+      "installGradle": true
     },
     "ghcr.io/devcontainers/features/node:1": {
-      "version": "22"
-    },
-    "ghcr.io/devcontainers/features/github-cli:1": {}
+      "version": "20"
+    }
   },
-  "containerEnv": {
-    "ANDROID_HOME": "/opt/android-sdk",
-    "GRADLE_OPTS": "-Dorg.gradle.daemon=false -Dorg.gradle.parallel=true -Dorg.gradle.jvmargs=-Xmx8g"
-  },
-  "postCreateCommand": "bash .devcontainer/post-create.sh",
   "customizations": {
     "vscode": {
       "extensions": [
         "vscjava.vscode-java-pack",
-        "mathiasfrohlich.Kotlin",
-        "dbaeumer.vscode-eslint",
-        "esbenp.prettier-vscode"
+        "vscjava.vscode-gradle",
+        "fwcd.kotlin",
+        "github.vscode-github-actions"
       ]
     }
   },
-  "remoteUser": "vscode"
+  "postCreateCommand": "sudo apt-get update && sudo apt-get install -y pngquant webp cpio && cd web-ui && pnpm install",
+  "forwardPorts": [8080],
+  "containerEnv": {
+    "GRADLE_OPTS": "-Dorg.gradle.parallel=true -Dorg.gradle.workers.max=8 -Dorg.gradle.caching=true",
+    "ANDROID_SDK_ROOT": "/usr/lib/android-sdk"
+  }
 }
