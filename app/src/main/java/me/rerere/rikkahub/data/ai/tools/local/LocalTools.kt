@@ -32,7 +32,7 @@ class LocalTools(
 
     val calendarCreateTool by lazy { buildCalendarCreateTool(context) }
 
-    val rootShellTool by lazy { buildRootShellTool(shellSessionManager, shellAuditLogger) }
+    val rootShellTool by lazy { buildRootShellTool(shellSessionManager, shellAuditLogger, isSubAgent) }
 
     val ptyExecTool by lazy { buildPtyExecTool(context, shellAuditLogger) }
 

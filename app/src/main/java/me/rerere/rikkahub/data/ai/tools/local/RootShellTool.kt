@@ -22,6 +22,7 @@ private const val ROOT_SHELL_DEFAULT_TIMEOUT_MS = 30_000L
 internal fun buildRootShellTool(
     shellSessionManager: ShellSessionManager? = null,
     shellAuditLogger: ShellAuditLogger? = null,
+    isSubAgent: Boolean = false,
 ): Tool {
     val runner = RootShellRunner()
     return Tool(
@@ -68,10 +69,13 @@ internal fun buildRootShellTool(
                 required = listOf("command"),
             )
         },
-        needsApproval = { json ->
-            val command = json.jsonObject["command"]?.jsonPrimitive?.contentOrNull.orEmpty()
-            // 只读命令免审批; 写命令需要用户审批; 高危命令无需审批(execute 直接拒绝)
-            ShellSafety.classify(command) == ShellRisk.WRITE
+        needsApproval = if (isSubAgent) {
+            { false } // 子代理无人审批, 全部自动放行 (子代理环境已受限)
+        } else {
+            { json ->
+                val command = json.jsonObject["command"]?.jsonPrimitive?.contentOrNull.orEmpty()
+                ShellSafety.classify(command) == ShellRisk.WRITE
+            }
         },
         execute = {
             val params = it.jsonObject
