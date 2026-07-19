@@ -5,8 +5,8 @@ import android.content.Context
 import android.content.Intent
 import android.util.Log
 import kotlinx.coroutines.flow.first
+import me.rerere.ai.core.MessageRole
 import me.rerere.ai.provider.ProviderManager
-import me.rerere.ai.ui.MessageRole
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
 import me.rerere.rikkahub.data.datastore.SettingsStore
@@ -86,10 +86,6 @@ class ScheduledTaskExecutor(
         val provider = model.findProvider(settings.providers) ?: return
         val handler = providerManager.getProviderByType(provider)
 
-        // 任务专属会话的历史（延续上下文）
-        val existing = task.conversationId?.let { cid ->
-            runCatching { conversationRepo.getConversationById(Uuid.parse(cid)) }.getOrNull()
-        }
         // 任务专属会话的历史（延续上下文）
         // 必须剥离 tool 相关消息: 定时生成不走工具循环, 携带 toolCalls/孤立 tool 结果
         // 会让部分 provider 直接 400

@@ -512,6 +512,7 @@ private fun ChatFilesPickerSheet(
     val context = LocalContext.current
     val toaster = LocalToaster.current
     val filesManager: FilesManager = koinInject()
+    val scope = rememberCoroutineScope()
     var showInjectionSheet by remember { mutableStateOf(false) }
     var showCompressDialog by remember { mutableStateOf(false) }
 
