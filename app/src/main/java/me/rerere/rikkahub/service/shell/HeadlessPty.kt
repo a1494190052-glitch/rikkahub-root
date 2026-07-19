@@ -215,7 +215,7 @@ class HeadlessPty(
         val s = session ?: return
         try {
             if (s.isRunning) {
-                writeRaw("exit\n")
+                sendRaw("exit\n")
                 delay(200)
             }
         } catch (_: Throwable) {
