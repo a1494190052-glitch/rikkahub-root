@@ -2,11 +2,7 @@ package me.rerere.rikkahub.service.shell
 
 import android.content.Context
 import android.util.Log
-import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.isActive
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import me.rerere.rikkahub.ui.pages.extensions.workspace.buildWorkspaceProotLaunch
 import me.rerere.rikkahub.ui.pages.extensions.workspace.prepareWorkspaceTerminalSession
@@ -23,7 +19,6 @@ import java.util.concurrent.ConcurrentHashMap
  */
 class PtySessionManager(
     private val context: Context,
-    private val appScope: CoroutineScope,
 ) {
     data class PtySessionEntry(
         val id: String,
@@ -38,15 +33,6 @@ class PtySessionManager(
     private val byId = ConcurrentHashMap<String, PtySessionEntry>()
     /** name -> id */
     private val byName = ConcurrentHashMap<String, String>()
-
-    init {
-        appScope.launch {
-            while (isActive) {
-                delay(REAP_INTERVAL_MS)
-                runCatching { reapIdle() }
-            }
-        }
-    }
 
     /**
      * 打开 PTY 会话 (name 为主键).
@@ -130,8 +116,6 @@ class PtySessionManager(
 
     companion object {
         private const val TAG = "PtySessionManager"
-        private const val IDLE_TIMEOUT_MS = 10 * 60 * 1000L
-        private const val REAP_INTERVAL_MS = 2 * 60 * 1000L
         private const val MAX_SESSIONS = 4
         private val HOST_ENV = arrayOf(
             "TERM=xterm-256color", "PATH=/sbin:/system/bin:/system/xbin:/vendor/bin",
