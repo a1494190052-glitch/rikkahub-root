@@ -434,6 +434,13 @@ class ChatService(
                     )
                 )
 
+                // 捕获原始消息的 parts 作为基准（流式过程中每次基于它追加）
+                val originalConvMsg = conversation.currentMessages.getOrNull(lastAssistantIdx)
+                    ?: return@launch
+                val baseParts = originalConvMsg.parts
+                // 跟踪累计的续写文本，用于流式 delta 追加
+                var accumulatedContinuation = ""
+
                 generationHandler.generateText(
                     settings = settings,
                     model = model,
@@ -460,24 +467,29 @@ class ChatService(
                 ).collect { chunk ->
                     when (chunk) {
                         is GenerationChunk.Messages -> {
-                            // chunk.messages 包含所有上下文 + 新回复, 取最后一条作为续写结果
-                            val newReply = chunk.messages.lastOrNull() ?: return@collect
+                            // chunk.messages 包含所有上下文 + AI 新回复
+                            // AI 的续写回复是最后一条（在原消息 + SYSTEM 之后）
+                            val continuationMsg = chunk.messages.lastOrNull() ?: return@collect
+                            val currentText = continuationMsg.parts
+                                .filterIsInstance<UIMessagePart.Text>()
+                                .joinToString("") { it.text }
+                            if (currentText.isEmpty()) return@collect
+                            // 文本没增长（流式中间帧）跳过
+                            if (currentText == accumulatedContinuation) return@collect
+
+                            accumulatedContinuation = currentText
+
                             val currentConv = session.state.value
-                            val originalNode = currentConv.messageNodes.getOrNull(lastAssistantIdx) ?: return@collect
-                            val originalMsg = originalNode.currentMessage
+                            val node = currentConv.messageNodes.getOrNull(lastAssistantIdx)
+                                ?: return@collect
 
-                            // 真正的"续写": 保留原消息, 把新产生的文本追加到末尾
-                            val continuationParts = newReply.parts.filterIsInstance<UIMessagePart.Text>()
-                            if (continuationParts.isEmpty()) return@collect
-
-                            val mergedParts = originalMsg.parts.toMutableList().apply {
-                                // 追加续写的新文本部分
-                                addAll(continuationParts)
-                            }
-                            val mergedMessage = originalMsg.copy(parts = mergedParts)
+                            // 关键: 以原始消息 parts 为底座 + 当前累计续写文本
+                            // 这样每次都是替换续写部分，不会重复堆积
+                            val mergedParts = baseParts + UIMessagePart.Text(text = currentText)
+                            val mergedMessage = node.currentMessage.copy(parts = mergedParts)
                             val updatedConv = currentConv.copy(
                                 messageNodes = currentConv.messageNodes.toMutableList().apply {
-                                    set(lastAssistantIdx, originalNode.copy(
+                                    set(lastAssistantIdx, node.copy(
                                         messages = listOf(mergedMessage),
                                         selectIndex = 0,
                                     ))
