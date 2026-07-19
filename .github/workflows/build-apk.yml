@@ -4,6 +4,11 @@ on:
   push:
   workflow_dispatch:
 
+# 新提交自动取消旧构建，不排队
+concurrency:
+  group: apk-build
+  cancel-in-progress: true
+
 jobs:
   build:
     runs-on: ubuntu-latest
