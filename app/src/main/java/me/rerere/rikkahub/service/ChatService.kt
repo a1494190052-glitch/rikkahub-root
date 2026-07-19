@@ -463,20 +463,30 @@ class ChatService(
                             // chunk.messages 包含所有上下文 + 新回复, 取最后一条作为续写结果
                             val newReply = chunk.messages.lastOrNull() ?: return@collect
                             val currentConv = session.state.value
-                            // 替换或追加到对话末尾
+                            val originalNode = currentConv.messageNodes.getOrNull(lastAssistantIdx) ?: return@collect
+                            val originalMsg = originalNode.currentMessage
+
+                            // 真正的"续写": 保留原消息, 把新产生的文本追加到末尾
+                            val continuationParts = newReply.parts.filterIsInstance<UIMessagePart.Text>()
+                            if (continuationParts.isEmpty()) return@collect
+
+                            val mergedParts = originalMsg.parts.toMutableList().apply {
+                                // 追加续写的新文本部分
+                                addAll(continuationParts)
+                            }
+                            val mergedMessage = originalMsg.copy(parts = mergedParts)
                             val updatedConv = currentConv.copy(
                                 messageNodes = currentConv.messageNodes.toMutableList().apply {
-                                    if (lastAssistantIdx < size) {
-                                        set(lastAssistantIdx, newReply.toMessageNode())
-                                    } else {
-                                        add(newReply.toMessageNode())
-                                    }
+                                    set(lastAssistantIdx, originalNode.copy(
+                                        messages = listOf(mergedMessage),
+                                        selectIndex = 0,
+                                    ))
                                 }
                             )
                             session.state.value = updatedConv
 
                             appEventBus.tryEmit(
-                                AppEvent.ChatGenerationUpdate(conversationId, newReply, "...")
+                                AppEvent.ChatGenerationUpdate(conversationId, mergedMessage, "...")
                             )
                         }
                     }
