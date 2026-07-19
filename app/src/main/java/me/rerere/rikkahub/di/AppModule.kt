@@ -31,7 +31,7 @@ val appModule = module {
     }
 
     single {
-        LocalTools(get(), get(), get(), get(), get(), get(), get())
+        LocalTools(get(), get(), get(), get(), get(), get(), get(), get())
     }
 
     // 持久 Shell 会话注册表(workspace/root 复用, 空闲自动回收)

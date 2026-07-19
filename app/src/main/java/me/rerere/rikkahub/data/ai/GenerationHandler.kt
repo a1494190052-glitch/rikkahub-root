@@ -383,6 +383,8 @@ class GenerationHandler(
                     appendLine()
                     append(tool.systemPrompt(model, messages))
                 }
+                // 宿主环境与自身能力简报(跟随启用的本地工具/审批开关动态生成)
+                append(buildHostCapabilityPrompt(assistant, settings))
             }
             if (system.isNotBlank()) add(UIMessage.system(prompt = system))
             addAll(messages.limitContext(assistant.contextMessageSize))

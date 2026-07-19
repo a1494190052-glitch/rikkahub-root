@@ -14,6 +14,7 @@ class LocalTools(
     private val shellSessionManager: me.rerere.workspace.ShellSessionManager? = null,
     private val shellAuditLogger: me.rerere.rikkahub.service.shell.ShellAuditLogger? = null,
     private val ptySessionManager: me.rerere.rikkahub.service.shell.PtySessionManager? = null,
+    private val mcpManager: me.rerere.rikkahub.data.ai.mcp.McpManager? = null,
     private val isSubAgent: Boolean = false,
 ) {
     val javascriptTool by lazy { buildJavascriptTool() }
@@ -48,6 +49,8 @@ class LocalTools(
         ptySessionManager?.let { buildPtySessionTool(context, it, shellAuditLogger) { toolApprovalOverride("pty_session") } }
     }
 
+    val mcpManagerTool by lazy { buildMcpManagerTool(settingsStore, mcpManager) }
+
     /**
      * 子代理专用实例: 不带持久 shell 会话, root_shell 强制走一次性进程。
      * 并行子代理若共享 host_root 持久会话会互相污染 cwd / 环境变量。
@@ -62,6 +65,10 @@ class LocalTools(
 
     fun getTools(options: List<LocalToolOption>): List<Tool> {
         val tools = mutableListOf<Tool>()
+        // mcp_manager 常驻(子代理除外: 配置变更需人工审批, 子代理拿不到审批会卡死)
+        if (!isSubAgent) {
+            tools.add(mcpManagerTool)
+        }
         if (options.contains(LocalToolOption.JavascriptEngine)) {
             tools.add(javascriptTool)
         }
