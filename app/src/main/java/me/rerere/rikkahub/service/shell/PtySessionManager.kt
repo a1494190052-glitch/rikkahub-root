@@ -13,17 +13,17 @@ import me.rerere.rikkahub.ui.pages.extensions.workspace.prepareWorkspaceTerminal
 import me.rerere.rikkahub.ui.pages.extensions.workspace.workspaceRootfsReady
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
-import kotlin.random.Random
 
 /**
  * 持久 PTY 会话组管理器
  *
- * 管理多个 HeadlessPty 实例, 每个有唯一 id + 可选助记名.
- * 对齐 ShellSessionManager 的空闲回收策略 (IDLE_TIMEOUT_MS = 10 分钟).
+ * name 为主键: 同名 open 自动复用已有会话, AI 只需记名字不用记 id.
+ * send/read/close 支持 name 或 id 定位.
+ * 自动空闲回收 (10 分钟), 最多 4 个并发.
  */
 class PtySessionManager(
     private val context: Context,
-    private val appScope: kotlinx.coroutines.CoroutineScope,
+    private val appScope: CoroutineScope,
 ) {
     data class PtySessionEntry(
         val id: String,
@@ -34,9 +34,11 @@ class PtySessionManager(
         @Volatile var lastUsedAt: Long = System.currentTimeMillis(),
     )
 
-    private val sessions = ConcurrentHashMap<String, PtySessionEntry>()
+    /** id -> entry */
+    private val byId = ConcurrentHashMap<String, PtySessionEntry>()
+    /** name -> id */
+    private val byName = ConcurrentHashMap<String, String>()
 
-    // 自动空闲回收: 每 2 分钟扫描, 关掉 10 分钟没动过的会话
     init {
         appScope.launch {
             while (isActive) {
@@ -46,90 +48,94 @@ class PtySessionManager(
         }
     }
 
-    private val HOST_ENV = arrayOf(
-        "TERM=xterm-256color",
-        "PATH=/sbin:/system/bin:/system/xbin:/vendor/bin",
-        "HOME=/sdcard",
-        "LANG=C.UTF-8",
-    )
-
     /**
-     * 打开一个新的持久 PTY 会话.
-     * target: "host" = Android host root shell via su; 其他 = workspace 名.
-     * 返回新会话 id.
-     * 最多 MAX_SESSIONS 个并发会话; 超限时自动关闭最旧的空闲会话腾位.
+     * 打开 PTY 会话 (name 为主键).
+     * 如果同名会话已存在则返回已有 id (复用, 不新建).
      */
-    suspend fun open(target: String, name: String = ""): String {
+    suspend fun open(target: String, name: String): PtySessionEntry {
+        // 同名已存在 -> 直接复用
+        val existingId = byName[name]
+        if (existingId != null) {
+            val entry = byId[existingId]
+            if (entry != null) {
+                entry.lastUsedAt = System.currentTimeMillis()
+                Log.i(TAG, "reusing session $existingId (name=$name)")
+                return entry
+            } else {
+                byName.remove(name)
+            }
+        }
+
         // 超限时关闭最旧空闲会话
-        while (sessions.size >= MAX_SESSIONS) {
-            val oldest = sessions.values.minByOrNull { it.lastUsedAt }
+        while (byId.size >= MAX_SESSIONS) {
+            val oldest = byId.values.minByOrNull { it.lastUsedAt }
             if (oldest != null) {
                 Log.w(TAG, "max sessions ($MAX_SESSIONS) reached, evicting ${oldest.id}")
-                close(oldest.id)
+                closeById(oldest.id)
             } else break
         }
-        val id = "pty-" + Random.nextInt(1000, 9999).toString()
+
+        val id = "pty-" + name.take(16)
         val pty = if (target == "host") {
             HeadlessPty("su", "/", emptyArray(), HOST_ENV, killTreeWithSu = true)
         } else {
             val workspacesDir = File(context.filesDir, "workspaces")
             val wsDir = File(workspacesDir, target)
-            if (!wsDir.isDirectory) {
-                error("workspace '$target' not found")
-            }
-            if (!workspaceRootfsReady(context, target)) {
-                error("workspace '$target' rootfs is not installed yet")
-            }
-            withContext(Dispatchers.IO) {
-                prepareWorkspaceTerminalSession(context, target)
-            }
+            if (!wsDir.isDirectory) error("workspace '$target' not found")
+            if (!workspaceRootfsReady(context, target)) error("workspace '$target' rootfs is not installed")
+            withContext(Dispatchers.IO) { prepareWorkspaceTerminalSession(context, target) }
             val launch = buildWorkspaceProotLaunch(context, target)
             HeadlessPty(launch.shellPath, launch.cwd, launch.args, launch.env, killTreeWithSu = false)
         }
         pty.open()
-        sessions[id] = PtySessionEntry(id, name.ifEmpty { target }, target, pty)
-        Log.i(TAG, "opened session $id (target=$target, name=$name)")
-        return id
-    }
-
-    /** 获取会话 (不存在返回 null), 更新 lastUsedAt */
-    fun get(id: String): PtySessionEntry? {
-        val entry = sessions[id] ?: return null
-        entry.lastUsedAt = System.currentTimeMillis()
+        val entry = PtySessionEntry(id, name, target, pty)
+        byId[id] = entry
+        byName[name] = id
+        Log.i(TAG, "opened session $id (name=$name, target=$target)")
         return entry
     }
 
-    /** 列出所有活跃会话 */
-    fun list(): List<PtySessionEntry> = sessions.values.toList()
+    /** 按 id 或 name 查找 (不存在返回 null) */
+    fun get(idOrName: String): PtySessionEntry? {
+        val entry = byId[idOrName] ?: byName[idOrName]?.let { byId[it] }
+        entry?.lastUsedAt = System.currentTimeMillis()
+        return entry
+    }
 
-    /** 关闭并移除会话 */
-    suspend fun close(id: String): PtySessionEntry? {
-        val entry = sessions.remove(id) ?: return null
+    fun list(): List<PtySessionEntry> = byId.values.toList()
+
+    suspend fun close(idOrName: String): PtySessionEntry? {
+        val entry = get(idOrName) ?: return null
+        closeById(entry.id)
+        return entry
+    }
+
+    private suspend fun closeById(id: String): PtySessionEntry? {
+        val entry = byId.remove(id) ?: return null
+        byName.remove(entry.name)
         entry.pty.close()
-        Log.i(TAG, "closed session $id")
+        Log.i(TAG, "closed $id (name=${entry.name})")
         return entry
     }
 
-    /** 关闭所有空闲超时的会话, 返回关闭的数量 */
     suspend fun reapIdle(idleTimeoutMs: Long = IDLE_TIMEOUT_MS): Int {
         val now = System.currentTimeMillis()
-        val stale = sessions.values.filter { now - it.lastUsedAt > idleTimeoutMs }
-        stale.forEach { close(it.id) }
-        if (stale.isNotEmpty()) {
-            Log.i(TAG, "reaped ${stale.size} idle sessions")
-        }
+        val stale = byId.values.filter { now - it.lastUsedAt > idleTimeoutMs }
+        stale.forEach { closeById(it.id) }
+        if (stale.isNotEmpty()) Log.i(TAG, "reaped ${stale.size} idle sessions")
         return stale.size
     }
 
-    /** 关闭所有会话 */
-    suspend fun closeAll() {
-        sessions.keys.toList().forEach { close(it) }
-    }
+    suspend fun closeAll() { byId.keys.toList().forEach { closeById(it) } }
 
     companion object {
         private const val TAG = "PtySessionManager"
-        private const val IDLE_TIMEOUT_MS = 10 * 60 * 1000L // 10 分钟
-        private const val REAP_INTERVAL_MS = 2 * 60 * 1000L  // 每 2 分钟扫描
-        private const val MAX_SESSIONS = 4                    // 最多并发会话
+        private const val IDLE_TIMEOUT_MS = 10 * 60 * 1000L
+        private const val REAP_INTERVAL_MS = 2 * 60 * 1000L
+        private const val MAX_SESSIONS = 4
+        private val HOST_ENV = arrayOf(
+            "TERM=xterm-256color", "PATH=/sbin:/system/bin:/system/xbin:/vendor/bin",
+            "HOME=/sdcard", "LANG=C.UTF-8",
+        )
     }
 }
