@@ -254,7 +254,30 @@ class ChatVM(
      * 不在对话中产生可见的用户消息, 不破坏角色扮演沉浸感.
      */
     fun continueLastMessage() {
-        val conversation = conversation.value
+        var conversation = conversation.value
+
+        // 清理旧版遗留的可见续写消息 (role=USER, text包含[continue])
+        val hasStaleContinue = conversation.messageNodes.any { node ->
+            node.currentMessage.role == MessageRole.USER &&
+            node.currentMessage.parts.any { part ->
+                part is UIMessagePart.Text &&
+                (part.text.startsWith("[continue]") || part.text.startsWith("[继续]"))
+            }
+        }
+        if (hasStaleContinue) {
+            conversation = conversation.copy(
+                messageNodes = conversation.messageNodes.filterNot { node ->
+                    node.currentMessage.role == MessageRole.USER &&
+                    node.currentMessage.parts.any { part ->
+                        part is UIMessagePart.Text &&
+                        (part.text.startsWith("[continue]") || part.text.startsWith("[继续]"))
+                    }
+                }
+            )
+            updateConversation(conversation)
+            saveConversationAsync()
+        }
+
         val lastAssistantNode = conversation.messageNodes.lastOrNull { node ->
             node.currentMessage.role == MessageRole.ASSISTANT
         } ?: return
