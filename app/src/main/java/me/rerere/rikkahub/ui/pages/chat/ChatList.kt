@@ -315,6 +315,7 @@ private fun ChatListNormal(
             itemsIndexed(
                 items = conversation.messageNodes,
                 key = { index, item -> item.id },
+                contentType = { index, item -> "message" },
             ) { index, node ->
                 Column {
                     ListSelectableItem(
@@ -370,7 +371,7 @@ private fun ChatListNormal(
             }
 
             if (!loading && assistant?.allowConversationSystemPrompt == true && onConversationSystemPromptChange != null) {
-                item(key = "ConversationSystemPrompt") {
+                item(key = "ConversationSystemPrompt", contentType = "system_prompt") {
                     ConversationSystemPromptButton(
                         customSystemPrompt = conversation.customSystemPrompt,
                         onSystemPromptChange = onConversationSystemPromptChange,
@@ -379,7 +380,7 @@ private fun ChatListNormal(
             }
 
             if (loading) {
-                item(LoadingIndicatorKey) {
+                item(LoadingIndicatorKey, contentType = "loading") {
                     Row(
                         modifier = Modifier.padding(8.dp),
                         verticalAlignment = Alignment.CenterVertically,
@@ -402,7 +403,7 @@ private fun ChatListNormal(
             }
 
             // 为了能正确滚动到这
-            item(ScrollBottomKey) {
+            item(ScrollBottomKey, contentType = "spacer") {
                 Spacer(
                     Modifier
                         .fillMaxWidth()

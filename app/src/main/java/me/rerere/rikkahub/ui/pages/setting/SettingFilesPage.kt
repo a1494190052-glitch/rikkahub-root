@@ -34,7 +34,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collectAsState
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -80,7 +80,7 @@ fun SettingFilesPage(
     var selectedFolder by remember { mutableStateOf(FileFolders.UPLOAD) }
     var pendingDelete by remember { mutableStateOf<ManagedFileEntity?>(null) }
     var showCleanDialog by remember { mutableStateOf(false) }
-    val files by filesManager.observe(selectedFolder).collectAsState(initial = emptyList())
+    val files by filesManager.observe(selectedFolder).collectAsStateWithLifecycle(initialValue = emptyList())
 
     if (pendingDelete != null) {
         val target = pendingDelete!!

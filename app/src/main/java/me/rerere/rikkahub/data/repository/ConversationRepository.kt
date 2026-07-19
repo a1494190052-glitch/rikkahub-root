@@ -288,21 +288,22 @@ class ConversationRepository(
             conversationDAO.insert(
                 conversationToConversationEntity(conversation)
             )
-            saveMessageNodes(conversation.id.toString(), conversation.messageNodes)
+            saveAllMessageNodes(conversation.id.toString(), conversation.messageNodes)
         }
         messageFtsManager.indexConversation(conversation)
     }
 
     suspend fun updateConversation(conversation: Conversation) {
-        database.withTransaction {
+        val changedNodeIds = database.withTransaction {
             conversationDAO.update(
                 conversationToConversationEntity(conversation)
             )
-            // 删除旧的节点，插入新的节点
-            messageNodeDAO.deleteByConversation(conversation.id.toString())
-            saveMessageNodes(conversation.id.toString(), conversation.messageNodes)
+            saveMessageNodesIncremental(conversation.id.toString(), conversation.messageNodes)
         }
-        messageFtsManager.indexConversation(conversation)
+        // 只重建有变化的节点的 FTS 索引（避免全量重建）
+        if (changedNodeIds.isNotEmpty()) {
+            messageFtsManager.indexConversationNodes(conversation, changedNodeIds)
+        }
     }
 
     suspend fun deleteConversation(conversation: Conversation) {
@@ -467,7 +468,8 @@ class ConversationRepository(
         }
     }
 
-    private suspend fun saveMessageNodes(conversationId: String, nodes: List<MessageNode>) {
+    /** 全量保存（insertConversation 用） */
+    private suspend fun saveAllMessageNodes(conversationId: String, nodes: List<MessageNode>) {
         val entities = nodes.mapIndexed { index, node ->
             MessageNodeEntity(
                 id = node.id.toString(),
@@ -478,6 +480,59 @@ class ConversationRepository(
             )
         }
         messageNodeDAO.insertAll(entities)
+    }
+
+    /**
+     * 增量保存：只序列化/写入有变化的节点，返回变化的 nodeId 集合。
+     * 流式回复时通常只有最后一个节点变化，将 O(n) 写降为 O(1)。
+     */
+    private suspend fun saveMessageNodesIncremental(
+        conversationId: String,
+        nodes: List<MessageNode>
+    ): Set<String> {
+        val existing = messageNodeDAO.getNodesOfConversation(conversationId)
+        val existingById = existing.associateBy { it.id }
+        val newNodeIds = mutableSetOf<String>()
+        val changedNodeIds = mutableSetOf<String>()
+        val toWrite = mutableListOf<MessageNodeEntity>()
+
+        nodes.forEachIndexed { index, node ->
+            val nodeId = node.id.toString()
+            newNodeIds.add(nodeId)
+            val messagesJson = JsonInstant.encodeToString(node.messages)
+            val old = existingById[nodeId]
+
+            if (old == null
+                || old.messages != messagesJson
+                || old.nodeIndex != index
+                || old.selectIndex != node.selectIndex
+            ) {
+                changedNodeIds.add(nodeId)
+                toWrite.add(
+                    MessageNodeEntity(
+                        id = nodeId,
+                        conversationId = conversationId,
+                        nodeIndex = index,
+                        messages = messagesJson,
+                        selectIndex = node.selectIndex
+                    )
+                )
+            }
+        }
+
+        // 删除已被移除的节点
+        existing.forEach { entity ->
+            if (entity.id !in newNodeIds) {
+                messageNodeDAO.deleteById(entity.id)
+                changedNodeIds.add(entity.id) // 也要从 FTS 删除
+            }
+        }
+
+        if (toWrite.isNotEmpty()) {
+            messageNodeDAO.insertAll(toWrite)
+        }
+
+        return changedNodeIds
     }
 }
 

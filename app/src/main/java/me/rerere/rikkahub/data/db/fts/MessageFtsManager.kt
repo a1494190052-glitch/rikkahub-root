@@ -54,6 +54,44 @@ class MessageFtsManager(private val database: AppDatabase) {
         }
     }
 
+    /**
+     * 增量索引：只重建有变化的节点的 FTS 条目，而非整个会话。
+     * 流式回复时通常只有最后一个节点变化，将 O(n) 索引降为 O(k)。
+     */
+    suspend fun indexConversationNodes(
+        conversation: Conversation,
+        changedNodeIds: Set<String>
+    ) = withContext(Dispatchers.IO) {
+        val conversationId = conversation.id.toString()
+
+        // 删除变化节点的旧 FTS 条目
+        changedNodeIds.forEach { nodeId ->
+            db.execSQL("DELETE FROM message_fts WHERE node_id = ?", arrayOf(nodeId))
+        }
+
+        // 重新插入变化节点的 FTS 条目
+        conversation.messageNodes
+            .filter { it.id.toString() in changedNodeIds }
+            .forEach { node ->
+                node.messages.forEach { message ->
+                    val text = message.extractFtsText()
+                    if (text.isNotBlank()) {
+                        db.execSQL(
+                            "INSERT INTO message_fts(text, node_id, message_id, conversation_id, title, update_at) VALUES (?, ?, ?, ?, ?, ?)",
+                            arrayOf(
+                                text,
+                                node.id.toString(),
+                                message.id.toString(),
+                                conversationId,
+                                conversation.title,
+                                conversation.updateAt.toEpochMilli().toString(),
+                            )
+                        )
+                    }
+                }
+            }
+    }
+
     suspend fun deleteConversation(conversationId: String) = withContext(Dispatchers.IO) {
         db.execSQL("DELETE FROM message_fts WHERE conversation_id = ?", arrayOf(conversationId))
     }
