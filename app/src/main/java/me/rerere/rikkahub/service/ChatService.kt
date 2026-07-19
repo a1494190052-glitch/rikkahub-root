@@ -407,6 +407,95 @@ class ChatService(
         session.setJob(job)
     }
 
+    // ---- 静默续写 (不显示用户消息) ----
+
+    fun continueMessage(conversationId: Uuid, continuePrompt: String) {
+        val session = getOrCreateSession(conversationId)
+        session.getJob()?.cancel()
+
+        val job = appScope.launch {
+            try {
+                val conversation = session.state.value
+                val lastAssistantIdx = conversation.messageNodes.indexOfLast { node ->
+                    node.currentMessage.role == MessageRole.ASSISTANT
+                }
+                if (lastAssistantIdx == -1) return@launch
+
+                val settings = settingsStore.settingsFlow.first()
+                val assistant = settings.getAssistantById(conversation.assistantId)
+                    ?: settings.getCurrentAssistant()
+                val model = settings.findModelById(assistant.chatModelId ?: settings.chatModelId) ?: return@launch
+
+                // 构建消息列表: 截断到最后一条助手消息之前 + 续写指令作为 SYSTEM 消息
+                val contextMessages = conversation.currentMessages.subList(0, lastAssistantIdx + 1) + listOf(
+                    UIMessage(
+                        role = MessageRole.SYSTEM,
+                        parts = listOf(UIMessagePart.Text(text = continuePrompt)),
+                    )
+                )
+
+                appEventBus.emit(AppEvent.ChatGenerationStarted(conversationId, "..."))
+
+                generationHandler.generateText(
+                    settings = settings,
+                    model = model,
+                    processingStatus = session.processingStatus,
+                    messages = contextMessages,
+                    assistant = assistant,
+                    conversationSystemPrompt = conversation.customSystemPrompt,
+                    conversationModeInjectionIds = conversation.modeInjectionIds,
+                    conversationLorebookIds = conversation.lorebookIds,
+                    workspaceCwd = conversation.workspaceCwd,
+                    memories = if (assistant.useGlobalMemory) {
+                        memoryRepository.getGlobalMemories()
+                    } else {
+                        memoryRepository.getMemoriesOfAssistant(assistant.id.toString())
+                    },
+                    inputTransformers = buildList {
+                        addAll(inputTransformers)
+                        add(templateTransformer)
+                        add(workspaceReminderTransformer)
+                    },
+                    outputTransformers = outputTransformers,
+                    tools = emptyList(),
+                    maxSteps = 1,
+                ).collect { chunk ->
+                    when (chunk) {
+                        is GenerationChunk.Messages -> {
+                            // chunk.messages 包含所有上下文 + 新回复, 取最后一条作为续写结果
+                            val newReply = chunk.messages.lastOrNull() ?: return@collect
+                            val currentConv = session.state.value
+                            // 替换或追加到对话末尾
+                            val updatedConv = currentConv.copy(
+                                messageNodes = currentConv.messageNodes.toMutableList().apply {
+                                    if (lastAssistantIdx < size) {
+                                        set(lastAssistantIdx, newReply.toMessageNode())
+                                    } else {
+                                        add(newReply.toMessageNode())
+                                    }
+                                }
+                            )
+                            session.state.value = updatedConv
+
+                            appEventBus.tryEmit(
+                                AppEvent.ChatGenerationUpdate(conversationId, newReply, "...")
+                            )
+                        }
+                    }
+                }
+
+                // 持久化
+                saveConversation(conversationId, session.state.value)
+                // 清理旧的上一条消息的备选分支 (续写后旧分支无效)
+                appEventBus.emit(AppEvent.ChatGenerationEnded(conversationId, "...", null))
+                _generationDoneFlow.emit(conversationId)
+            } catch (e: Exception) {
+                addError(e, conversationId, title = context.getString(R.string.error_title_generation))
+            }
+        }
+        session.setJob(job)
+    }
+
     // ---- 处理工具调用审批 ----
 
     fun handleToolApproval(

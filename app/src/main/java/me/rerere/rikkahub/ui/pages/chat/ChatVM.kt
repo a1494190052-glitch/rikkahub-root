@@ -250,8 +250,8 @@ class ChatVM(
     /**
      * Continue 续写: 让 AI 接着最后一条助手消息继续生成
      *
-     * 取最后一条助手消息的最后一段文本作为"续写锚点"拼入提示,
-     * 然后以一条新用户消息触发补全.
+     * 通过 ChatService.continueMessage 静默注入 SYSTEM 指令,
+     * 不在对话中产生可见的用户消息, 不破坏角色扮演沉浸感.
      */
     fun continueLastMessage() {
         val conversation = conversation.value
@@ -264,7 +264,7 @@ class ChatVM(
             .trim()
         if (lastText.isBlank()) return
 
-        // 取最后 100 字符作为锚点
+        // 取最后 100 字符作为续写锚点 (AI 参考用, 用户不可见)
         val snippet = if (lastText.length > 100) {
             "…${lastText.takeLast(100)}"
         } else {
@@ -274,7 +274,8 @@ class ChatVM(
             R.string.continue_message_template,
             snippet
         )
-        handleMessageSend(listOf(UIMessagePart.Text(text = continuePrompt)))
+        // 直接调用 ChatService 的静默续写, 不走 handleMessageSend
+        chatService.continueMessage(_conversationId, continuePrompt)
     }
 
     fun stopGeneration() {
