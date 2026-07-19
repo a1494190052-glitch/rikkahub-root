@@ -66,8 +66,9 @@ val appModule = module {
     }
 
     // 持久 PTY 会话组管理器 (L2: AI 多轮交互终端)
+    // 自带空闲回收协程 (每 2 分钟扫描, 10 分钟空闲自动关闭)
     single {
-        me.rerere.rikkahub.service.shell.PtySessionManager(context = get())
+        me.rerere.rikkahub.service.shell.PtySessionManager(context = get(), appScope = get<me.rerere.rikkahub.AppScope>())
     }
 
     // 后台 Shell 任务管理器

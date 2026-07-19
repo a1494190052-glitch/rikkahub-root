@@ -2,7 +2,11 @@ package me.rerere.rikkahub.service.shell
 
 import android.content.Context
 import android.util.Log
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import me.rerere.rikkahub.ui.pages.extensions.workspace.buildWorkspaceProotLaunch
 import me.rerere.rikkahub.ui.pages.extensions.workspace.prepareWorkspaceTerminalSession
@@ -19,6 +23,7 @@ import kotlin.random.Random
  */
 class PtySessionManager(
     private val context: Context,
+    private val appScope: kotlinx.coroutines.CoroutineScope,
 ) {
     data class PtySessionEntry(
         val id: String,
@@ -31,6 +36,16 @@ class PtySessionManager(
 
     private val sessions = ConcurrentHashMap<String, PtySessionEntry>()
 
+    // 自动空闲回收: 每 2 分钟扫描, 关掉 10 分钟没动过的会话
+    init {
+        appScope.launch {
+            while (isActive) {
+                delay(REAP_INTERVAL_MS)
+                runCatching { reapIdle() }
+            }
+        }
+    }
+
     private val HOST_ENV = arrayOf(
         "TERM=xterm-256color",
         "PATH=/sbin:/system/bin:/system/xbin:/vendor/bin",
@@ -42,8 +57,17 @@ class PtySessionManager(
      * 打开一个新的持久 PTY 会话.
      * target: "host" = Android host root shell via su; 其他 = workspace 名.
      * 返回新会话 id.
+     * 最多 MAX_SESSIONS 个并发会话; 超限时自动关闭最旧的空闲会话腾位.
      */
     suspend fun open(target: String, name: String = ""): String {
+        // 超限时关闭最旧空闲会话
+        while (sessions.size >= MAX_SESSIONS) {
+            val oldest = sessions.values.minByOrNull { it.lastUsedAt }
+            if (oldest != null) {
+                Log.w(TAG, "max sessions ($MAX_SESSIONS) reached, evicting ${oldest.id}")
+                close(oldest.id)
+            } else break
+        }
         val id = "pty-" + Random.nextInt(1000, 9999).toString()
         val pty = if (target == "host") {
             HeadlessPty("su", "/", emptyArray(), HOST_ENV, killTreeWithSu = true)
@@ -105,5 +129,7 @@ class PtySessionManager(
     companion object {
         private const val TAG = "PtySessionManager"
         private const val IDLE_TIMEOUT_MS = 10 * 60 * 1000L // 10 分钟
+        private const val REAP_INTERVAL_MS = 2 * 60 * 1000L  // 每 2 分钟扫描
+        private const val MAX_SESSIONS = 4                    // 最多并发会话
     }
 }
