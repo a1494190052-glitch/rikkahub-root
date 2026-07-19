@@ -141,7 +141,9 @@ class HeadlessPty(
         try {
             delay(SETTLE_MS)
             writeRaw(PID_CMD)
-            waitFor(PID_PATTERN, deadline)?.let { shellPid = it.toIntOrNull() ?: -1 }
+            // pid 探测只给小窗口: 失败不致命(仅影响 su 子树兜底清理), 不能吃掉总预算
+            val pidDeadline = minOf(deadline, System.currentTimeMillis() + PID_PROBE_MS)
+            waitFor(PID_PATTERN, pidDeadline)?.let { shellPid = it.toIntOrNull() ?: -1 }
 
             writeRaw(command + "\n")
             var matched = 0
@@ -230,6 +232,7 @@ class HeadlessPty(
         private const val POLL_WINDOW_ROWS = 60
         private const val POLL_INTERVAL_MS = 120L
         private const val SETTLE_MS = 350L
+        private const val PID_PROBE_MS = 3_000L
         private const val OUTPUT_DRAIN_MS = 250L
 
         private const val MAX_SCREEN_CHARS = 48 * 1024
