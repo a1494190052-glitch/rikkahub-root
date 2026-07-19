@@ -434,8 +434,6 @@ class ChatService(
                     )
                 )
 
-                appEventBus.emit(AppEvent.ChatGenerationStarted(conversationId, "..."))
-
                 generationHandler.generateText(
                     settings = settings,
                     model = model,
@@ -486,8 +484,6 @@ class ChatService(
 
                 // 持久化
                 saveConversation(conversationId, session.state.value)
-                // 清理旧的上一条消息的备选分支 (续写后旧分支无效)
-                appEventBus.emit(AppEvent.ChatGenerationEnded(conversationId, "...", null))
                 _generationDoneFlow.emit(conversationId)
             } catch (e: Exception) {
                 addError(e, conversationId, title = context.getString(R.string.error_title_generation))
