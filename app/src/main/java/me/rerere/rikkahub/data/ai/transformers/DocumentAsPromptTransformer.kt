@@ -69,25 +69,47 @@ object DocumentAsPromptTransformer : InputMessageTransformer {
         return "/upload/${file.name}"
     }
 
+    // 解析结果 LRU 缓存: 同一份附件在后续每轮对话都会被重复 transform,
+    // PDF/DOCX 解析是重 CPU 操作, 必须按 (路径+mtime+大小) 缓存避免每轮重解析
+    private const val MAX_CACHE_ENTRIES = 32
+    private val parseCache = object : LinkedHashMap<String, String>(MAX_CACHE_ENTRIES, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, String>?): Boolean =
+            size > MAX_CACHE_ENTRIES
+    }
+
     private fun readDocumentContent(document: UIMessagePart.Document): String {
         val file = runCatching { document.url.toUri().toFile() }.getOrNull()
             ?: return "[ERROR, invalid file uri: ${document.fileName}]"
         if (!file.exists() || !file.isFile) {
             return "[ERROR, file not found: ${document.fileName}]"
         }
-        return runCatching {
+        val cacheKey = "${file.absolutePath}|${file.lastModified()}|${file.length()}|${document.mime}"
+        synchronized(parseCache) {
+            parseCache[cacheKey]?.let { return it }
+        }
+        val content = runCatching {
             when {
-                document.mime == "application/pdf" -> parsePdfAsText(file)
-                document.mime == "application/vnd.openxmlformats-officedocument.wordprocessingml.document" -> parseDocxAsText(file)
-                document.mime == "application/vnd.openxmlformats-officedocument.presentationml.presentation" -> parsePptxAsText(file)
-                document.mime == "application/epub+zip" -> parseEpubAsText(file)
+                document.mime == "application/pdf" -> parsePdfAsText(file).capped()
+                document.mime == "application/vnd.openxmlformats-officedocument.wordprocessingml.document" -> parseDocxAsText(file).capped()
+                document.mime == "application/vnd.openxmlformats-officedocument.presentationml.presentation" -> parsePptxAsText(file).capped()
+                document.mime == "application/epub+zip" -> parseEpubAsText(file).capped()
                 isTextLikeFile(document.fileName, document.mime) -> readTextCapped(file)
                 else -> binaryPlaceholder(document, file)
             }
         }.getOrElse {
             "[ERROR, failed to read file: ${document.fileName}]"
         }
+        synchronized(parseCache) {
+            parseCache[cacheKey] = content
+        }
+        return content
     }
+
+    /** Office/EPUB 解析出的全文同样要截断, 防止大文档撑爆 LLM 上下文 */
+    private fun String.capped(): String =
+        if (length <= MAX_TEXT_READ_CHARS) this
+        else take(MAX_TEXT_READ_CHARS) +
+            "\n\n... [内容过长已截断: 仅显示前 ${MAX_TEXT_READ_CHARS / 1024}K 字符, 完整文件可用 workspace 工具按路径读取] ..."
 
     /** 文本文件上限截断读取, 防止大文件撑爆 LLM 上下文 */
     private fun readTextCapped(file: File): String {

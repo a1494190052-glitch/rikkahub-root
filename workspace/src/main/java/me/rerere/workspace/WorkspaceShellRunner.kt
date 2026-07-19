@@ -133,11 +133,12 @@ private class StreamCollector(
                         if (remaining > 0) {
                             tail.append(buffer, offset, remaining)
                             if (tail.length > tailChars) {
+                                // 只有尾部也溢出(真正丢内容)时才标 truncated
                                 val excess = tail.length - tailChars
                                 tail.delete(0, excess)
                                 omittedChars += excess
+                                truncated = true
                             }
-                            truncated = true
                         }
                     }
                 }

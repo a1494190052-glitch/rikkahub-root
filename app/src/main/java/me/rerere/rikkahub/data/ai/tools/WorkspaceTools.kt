@@ -25,7 +25,6 @@ import me.rerere.rikkahub.service.shell.BackgroundShellManager
 import me.rerere.rikkahub.service.shell.ShellAuditLogger
 import me.rerere.rikkahub.utils.generateUnifiedDiff
 import me.rerere.workspace.ShellSessionManager
-import me.rerere.workspace.WorkspaceCommandResult
 import me.rerere.workspace.WorkspaceFileEntry
 import me.rerere.workspace.WorkspaceManager
 import me.rerere.workspace.WorkspaceStorageArea
@@ -39,6 +38,7 @@ internal fun String.stripAnsi(): String = replace(ANSI_REGEX, "")
 
 private const val SHELL_TIMEOUT_MAX_SECONDS = 600L
 private const val MAX_READ_FILE_BYTES = 8L * 1024 * 1024
+private const val MAX_READ_IMAGE_BYTES = 32L * 1024 * 1024
 
 val WorkspaceToolDefaultApprovals: Map<String, Boolean> = mapOf(
     "workspace_read_file" to false,
@@ -658,7 +658,12 @@ private suspend fun WorkspaceRepository.readImageInRootfs(
     path: String,
 ): List<UIMessagePart> {
     val (area, relativePath) = rootfsPathToAreaAndRelative(path)
-    val buffer = ByteArrayOutputStream()
+    // 图片全量进内存 + base64 渲染，超大图会 OOM —— 限制 32MB
+    val size = fileSize(workspaceId, area, relativePath)
+    require(size <= MAX_READ_IMAGE_BYTES) {
+        "Image is too large to read inline: $path (${size / 1024 / 1024}MB, max ${MAX_READ_IMAGE_BYTES / 1024 / 1024}MB). Downscale it first (e.g. with ImageMagick) or inspect via shell."
+    }
+    val buffer = ByteArrayOutputStream(size.toInt().coerceAtLeast(8192))
     exportFile(workspaceId, area, relativePath, buffer)
     val bytes = buffer.toByteArray()
 
@@ -681,83 +686,13 @@ private suspend fun WorkspaceRepository.writeTextInRootfs(
     text: String,
     overwrite: Boolean,
 ): WorkspaceFileEntry {
-    val pathArg = path.shellQuote()
-    val result = runRootfsCommand(
-        workspaceId = workspaceId,
-        action = "Write file",
-        command = """
-            if [ -e $pathArg ] && [ ${(!overwrite).shellFlag()} = 1 ]; then
-              printf '%s\n' ${"File already exists: $path".shellQuote()} >&2
-              exit 1
-            fi
-            if [ -e $pathArg ] && [ ! -f $pathArg ]; then
-              printf '%s\n' ${"Path is not a file: $path".shellQuote()} >&2
-              exit 1
-            fi
-            parent=${'$'}(dirname -- $pathArg) || exit 1
-            mkdir -p -- "${'$'}parent" || exit 1
-            cat > $pathArg || exit 1
-            ${statEntryCommand(path)}
-        """.trimIndent(),
-        stdin = text.toByteArray(Charsets.UTF_8),
-    )
-    return result.stdout.parseRootfsEntry()
-}
-
-private suspend fun WorkspaceRepository.runRootfsCommand(
-    workspaceId: String,
-    action: String,
-    command: String,
-    stdin: ByteArray? = null,
-): WorkspaceCommandResult {
-    val result = executeCommand(
-        id = workspaceId,
-        command = command,
-        timeoutMillis = WorkspaceManager.DEFAULT_COMMAND_TIMEOUT_MS,
-        stdin = stdin,
-    )
-    if (result.timedOut) {
-        error("$action timed out")
-    }
-    if (result.exitCode != 0) {
-        val message = result.stderr.ifBlank { result.stdout }.trim()
-        error(if (message.isBlank()) "$action failed with exit code ${result.exitCode}" else message)
-    }
-    if (result.truncated) {
-        error("$action output is too large")
-    }
-    return result
-}
-
-private fun statEntryCommand(path: String): String {
-    val pathArg = path.shellQuote()
-    return """
-        if [ -d $pathArg ]; then entry_type=d; else entry_type=f; fi
-        entry_size=${'$'}(stat -c '%s' -- $pathArg) || exit 1
-        entry_mtime=${'$'}(stat -c '%Y' -- $pathArg) || exit 1
-        printf '%s\0%s\0%s\0%s\0' "${'$'}entry_type" "${'$'}entry_size" "${'$'}entry_mtime" $pathArg
-    """.trimIndent()
-}
-
-private fun String.parseRootfsEntry(): WorkspaceFileEntry =
-    parseRootfsEntries().singleOrNull() ?: error("Invalid file metadata output")
-
-private fun String.parseRootfsEntries(): List<WorkspaceFileEntry> {
-    val fields = split('\u0000').dropLastWhile { it.isEmpty() }
-    require(fields.size % 4 == 0) { "Invalid file metadata output" }
-    return fields.chunked(4).map { chunk ->
-        val type = chunk[0]
-        val size = chunk[1].toLongOrNull() ?: error("Invalid file size: ${chunk[1]}")
-        val updatedAt = (chunk[2].toLongOrNull() ?: error("Invalid file mtime: ${chunk[2]}")) * 1_000L
-        val path = chunk[3]
-        WorkspaceFileEntry(
-            path = path,
-            name = path.rootfsName(),
-            isDirectory = type == "d",
-            sizeBytes = size,
-            updatedAt = updatedAt,
-        )
-    }
+    // 与读取（fileSize/exportFile）同走文件 IO：
+    // root 模式下 rootfs shell 在宿主机真 root 环境执行，shell 重定向会写到
+    // 宿主机真实路径而不是 workspace 目录，写操作必须避开 shell。
+    val (area, relativePath) = rootfsPathToAreaAndRelative(path)
+    val entry = writeTextInArea(workspaceId, area, relativePath, text, overwrite)
+    // entry.path 是相对存储区的路径，统一对外呈现 rootfs 绝对路径
+    return entry.copy(path = path, name = path.substringAfterLast('/'))
 }
 
 private fun kotlinx.serialization.json.JsonObject.absolutePath(name: String): String {
@@ -782,14 +717,6 @@ private fun String.isOutsideWritableRoots(): Boolean {
         normalized == prefix || normalized.startsWith("$prefix/")
     }
 }
-
-private fun String.rootfsName(): String =
-    trimEnd('/').substringAfterLast('/').ifBlank { "/" }
-
-private fun String.shellQuote(): String =
-    "'" + replace("'", "'\"'\"'") + "'"
-
-private fun Boolean.shellFlag(): Int = if (this) 1 else 0
 
 private fun JsonObjectBuilder.putPathProperty(required: Boolean) {
     put("path", buildJsonObject {

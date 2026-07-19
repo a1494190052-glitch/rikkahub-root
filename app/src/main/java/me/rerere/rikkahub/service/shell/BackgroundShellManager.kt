@@ -56,7 +56,12 @@ class BackgroundShellManager(
         cwd: String = "",
     ): ShellTask {
         require(command.isNotBlank()) { "Command is required" }
-        val id = Uuid.random().toString().take(8)
+        // id 碰撞防护: 极小概率下重试
+        var id = Uuid.random().toString().take(8)
+        while (tasks.putIfAbsent(id, PLACEHOLDER) != null) {
+            id = Uuid.random().toString().take(8)
+        }
+        tasks.remove(id)
         val logFile = File(logsDir, "$id.log")
         val rootMode = rootModeProvider()
         val auditId = auditLogger.start(
@@ -101,8 +106,17 @@ class BackgroundShellManager(
             val tail = runCatching { tail(logFile, 40) }.getOrNull()
             auditLogger.finish(auditId, task.startedAt, status, exit, tail)
             Log.i(TAG, "background task $id finished: exit=$exit status=$status")
+            reapCompletedTasks()
         }
         return task
+    }
+
+    /** 清理 24h 前完成的旧任务(防内存表无限膨胀; 日志文件保留) */
+    private fun reapCompletedTasks(maxAgeMs: Long = 24 * 60 * 60 * 1000L) {
+        val now = System.currentTimeMillis()
+        tasks.values.removeIf { task ->
+            task.status != ShellTask.STATUS_RUNNING && now - task.startedAt > maxAgeMs
+        }
     }
 
     private fun buildProcess(
@@ -118,7 +132,7 @@ class BackgroundShellManager(
             ProcessBuilder("su", "-c", command)
                 .directory(workDir.takeIf { it.isDirectory } ?: wsFiles)
                 .redirectErrorStream(true)
-                .redirectOutput(logFile)
+                .redirectOutput(java.lang.ProcessBuilder.Redirect.appendTo(logFile))
                 .start()
         } else {
             val wsDir = File(workspacesDir, root)
@@ -140,7 +154,7 @@ class BackgroundShellManager(
                 ?: error("Rootfs is not installed or proot is unavailable")
             builder
                 .redirectErrorStream(true)
-                .redirectOutput(logFile)
+                .redirectOutput(java.lang.ProcessBuilder.Redirect.appendTo(logFile))
                 .start()
         }
     }
@@ -163,16 +177,46 @@ class BackgroundShellManager(
         return true
     }
 
+    /** 尾读: 只从文件末尾读, 几百 MB 的日志也不会 OOM; 超限时顺带截断保留尾部 */
     private fun tail(file: File, lines: Int): String {
-        val all = file.readLines()
+        val length = file.length()
+        if (length > MAX_LOG_BYTES) {
+            truncateLogKeepTail(file, KEEP_LOG_BYTES)
+        }
+        val readFrom = (file.length() - TAIL_READ_BYTES).coerceAtLeast(0)
+        val content = java.io.RandomAccessFile(file, "r").use { raf ->
+            raf.seek(readFrom)
+            val bytes = ByteArray((file.length() - readFrom).toInt())
+            raf.readFully(bytes)
+            String(bytes)
+        }
+        val all = content.lines().let { if (readFrom > 0) it.drop(1) else it } // 丢弃首行残段
         return if (all.size <= lines) {
-            all.joinToString("\n")
+            (if (readFrom > 0) "... [仅显示日志尾部]\n" else "") + all.joinToString("\n")
         } else {
-            "... [共 ${all.size} 行, 显示最后 $lines 行]\n" + all.takeLast(lines).joinToString("\n")
+            "... [共 ${all.size}+ 行, 显示最后 $lines 行]\n" + all.takeLast(lines).joinToString("\n")
+        }
+    }
+
+    /** 日志超限: 保留尾部(配合 appendTo 打开方式, 截断后进程续写无空洞) */
+    private fun truncateLogKeepTail(file: File, keepBytes: Long) {
+        runCatching {
+            val tailBytes = java.io.RandomAccessFile(file, "r").use { raf ->
+                val from = (file.length() - keepBytes).coerceAtLeast(0)
+                raf.seek(from)
+                ByteArray((file.length() - from).toInt()).also { raf.readFully(it) }
+            }
+            file.writeBytes(tailBytes)
         }
     }
 
     companion object {
         private const val TAG = "BackgroundShellMgr"
+        private const val MAX_LOG_BYTES = 8L * 1024 * 1024
+        private const val KEEP_LOG_BYTES = 2L * 1024 * 1024
+        private const val TAIL_READ_BYTES = 512L * 1024
+
+        /** id 碰撞占位 */
+        private val PLACEHOLDER = ShellTask("", "", "", "", false, 0, "", "")
     }
 }

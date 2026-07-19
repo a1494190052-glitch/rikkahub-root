@@ -49,6 +49,7 @@ class SnapshotManager {
 
     /**
      * 恢复快照: 恢复前自动对当前 files 区打一个 pre-restore 快照, 防止误操作丢数据.
+     * 半原子: 先把当前 files rename 到临时目录, 再复制快照, 失败时可回滚.
      */
     fun restore(workspaceDir: File, name: String): WorkspaceSnapshot {
         requireValidName(name)
@@ -56,9 +57,18 @@ class SnapshotManager {
         require(snap.isDirectory) { "snapshot not found: $name" }
         val filesDir = File(workspaceDir, FILES_DIR)
         val safety = create(workspaceDir, "pre-restore")
-        filesDir.deleteRecursively()
-        filesDir.mkdirs()
-        copyTree(snap, filesDir)
+        val backup = File(workspaceDir, "files.restore-backup-${System.currentTimeMillis()}")
+        require(filesDir.renameTo(backup)) { "failed to move current files aside" }
+        try {
+            filesDir.mkdirs()
+            copyTree(snap, filesDir)
+            backup.deleteRecursively()
+        } catch (e: Throwable) {
+            // 复制失败: 回滚原有 files 区
+            filesDir.deleteRecursively()
+            backup.renameTo(filesDir)
+            throw e
+        }
         return safety
     }
 
@@ -89,11 +99,12 @@ class SnapshotManager {
         }
     }
 
-    /** 返回 (总字节数, 文件数) */
+    /** 返回 (总字节数, 文件数); 符号链接跳过(不跟随, 防穿透到 workspace 外) */
     private fun scan(dir: File): Pair<Long, Int> {
         var bytes = 0L
         var count = 0
         dir.walkTopDown().forEach { f ->
+            if (java.nio.file.Files.isSymbolicLink(f.toPath())) return@forEach
             if (f.isFile) {
                 bytes += f.length()
                 count++
@@ -104,6 +115,7 @@ class SnapshotManager {
 
     private fun copyTree(src: File, dst: File) {
         src.walkTopDown().forEach { f ->
+            if (java.nio.file.Files.isSymbolicLink(f.toPath())) return@forEach
             val rel = f.relativeTo(src).path
             val out = File(dst, rel)
             if (f.isDirectory) {

@@ -53,8 +53,10 @@ import androidx.core.net.toUri
 import com.dokar.sonner.ToastType
 import dev.chrisbanes.haze.hazeSource
 import dev.chrisbanes.haze.rememberHazeState
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import me.rerere.ai.provider.Model
 import me.rerere.ai.ui.UIMessagePart
 import me.rerere.common.android.appTempFolder
@@ -628,35 +630,54 @@ private fun ChatFilesPickerSheet(
     val filePickerLauncher =
         rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
             if (uris.isNotEmpty()) {
-                val documents = uris.mapNotNull { uri ->
-                    val fileName = filesManager.getFileNameFromUri(uri) ?: "file"
-                    val mime = filesManager.getFileMimeType(uri) ?: "text/plain"
-                    // 所有文件类型均可上传(文本读取内容/二进制给元信息+路径), 仅限制大小
-                    val size = filesManager.getFileSize(uri)
-                    if (size != null && size > me.rerere.rikkahub.utils.MAX_ATTACHMENT_BYTES) {
+                // 文件元信息查询 + 拷贝是重 IO, 必须离开主线程, 否则大附件会 ANR
+                scope.launch {
+                    val tooLarge = mutableListOf<Pair<String, Long>>() // fileName to sizeMB
+                    val readFailed = mutableListOf<String>()
+                    val documents = withContext(Dispatchers.IO) {
+                        uris.mapNotNull { uri ->
+                            val fileName = filesManager.getFileNameFromUri(uri) ?: "file"
+                            // 未知类型按二进制处理, 避免误当文本解析
+                            val mime = filesManager.getFileMimeType(uri) ?: "application/octet-stream"
+                            // 所有文件类型均可上传(文本读取内容/二进制给元信息+路径), 仅限制大小
+                            val size = filesManager.getFileSize(uri)
+                            if (size != null && size > me.rerere.rikkahub.utils.MAX_ATTACHMENT_BYTES) {
+                                tooLarge.add(fileName to size / 1024 / 1024)
+                                return@mapNotNull null
+                            }
+                            val localUri = filesManager.createChatFilesByContents(listOf(uri)).firstOrNull()
+                                ?: run {
+                                    readFailed.add(fileName)
+                                    return@mapNotNull null
+                                }
+                            // 大小兜底: 部分 provider 不报 size(getFileSize 返回 null),
+                            // 拷贝完成后用本地文件实际长度再查一次, 防止超限绕过
+                            val localSize = runCatching { java.io.File(localUri.path!!).length() }.getOrDefault(0L)
+                            if (localSize > me.rerere.rikkahub.utils.MAX_ATTACHMENT_BYTES) {
+                                runCatching { java.io.File(localUri.path!!).delete() }
+                                tooLarge.add(fileName to localSize / 1024 / 1024)
+                                return@mapNotNull null
+                            }
+                            UIMessagePart.Document(url = localUri.toString(), fileName = fileName, mime = mime)
+                        }
+                    }
+                    // toast 回到主线程统一弹出
+                    tooLarge.forEach { (name, sizeMb) ->
                         toaster.show(
-                            context.getString(
-                                R.string.chat_input_file_too_large,
-                                fileName,
-                                size / 1024 / 1024,
-                            ),
+                            context.getString(R.string.chat_input_file_too_large, name, sizeMb),
                             type = ToastType.Error
                         )
-                        return@mapNotNull null
                     }
-                    val localUri = filesManager.createChatFilesByContents(listOf(uri)).firstOrNull()
-                        ?: run {
-                            toaster.show(
-                                context.getString(R.string.chat_input_file_read_failed, fileName),
-                                type = ToastType.Error
-                            )
-                            return@mapNotNull null
-                        }
-                    UIMessagePart.Document(url = localUri.toString(), fileName = fileName, mime = mime)
-                }
-                if (documents.isNotEmpty()) {
-                    inputState.addFiles(documents)
-                    dismissAll()
+                    readFailed.forEach { name ->
+                        toaster.show(
+                            context.getString(R.string.chat_input_file_read_failed, name),
+                            type = ToastType.Error
+                        )
+                    }
+                    if (documents.isNotEmpty()) {
+                        inputState.addFiles(documents)
+                        dismissAll()
+                    }
                 }
             }
         }

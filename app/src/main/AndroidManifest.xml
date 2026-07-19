@@ -176,6 +176,9 @@
       android:exported="true">
       <intent-filter>
         <action android:name="android.intent.action.BOOT_COMPLETED" />
+        <!-- 时区变化后 DAILY/WEEKLY 的触发时刻全变, 必须重排 -->
+        <action android:name="android.intent.action.TIMEZONE_CHANGED" />
+        <action android:name="android.intent.action.TIME_SET" />
       </intent-filter>
     </receiver>
 

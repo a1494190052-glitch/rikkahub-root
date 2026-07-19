@@ -79,6 +79,12 @@ class RikkaHubApp : Application() {
         }
         this.createNotificationChannel()
 
+        // WorkManager 默认 initializer 已在 manifest 移除(配合 koin workManagerFactory),
+        // 但定时任务 Worker 直接调 WorkManager.getInstance, 需确保已初始化; 重复调用会抛异常故 runCatching
+        runCatching {
+            androidx.work.WorkManager.initialize(this, androidx.work.Configuration.Builder().build())
+        }
+
         // set cursor window size to 32MB
         DatabaseUtil.setCursorWindowSize(32 * 1024 * 1024)
 
@@ -135,9 +141,9 @@ class RikkaHubApp : Application() {
         get<AppScope>().launch(Dispatchers.IO) {
             runCatching {
                 val repo = get<me.rerere.rikkahub.service.scheduler.ScheduledTaskRepository>()
-                me.rerere.rikkahub.service.scheduler.TaskScheduler.rescheduleAll(
+                me.rerere.rikkahub.service.scheduler.TaskScheduler.rescheduleAllWithCleanup(
                     this@RikkaHubApp,
-                    repo.getEnabled()
+                    repo
                 )
             }.onFailure {
                 Log.e(TAG, "rescheduleScheduledTasks failed", it)

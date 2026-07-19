@@ -32,6 +32,13 @@ class LocalTools(
 
     val rootShellTool by lazy { buildRootShellTool(shellSessionManager, shellAuditLogger) }
 
+    /**
+     * 子代理专用实例: 不带持久 shell 会话, root_shell 强制走一次性进程。
+     * 并行子代理若共享 host_root 持久会话会互相污染 cwd / 环境变量。
+     */
+    fun forSubAgent(): LocalTools =
+        LocalTools(context, eventBus, ttsManager, settingsStore, null, shellAuditLogger)
+
     val rootScreenshotTool by lazy { buildRootScreenshotTool(context) }
 
     val uiTreeTool by lazy { buildUiTreeTool(context) }

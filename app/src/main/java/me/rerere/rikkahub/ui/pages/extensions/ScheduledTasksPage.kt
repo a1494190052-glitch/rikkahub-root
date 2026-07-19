@@ -182,7 +182,10 @@ private fun CreateScheduledTaskDialog(
     var assistantId by remember { mutableStateOf(assistants.firstOrNull()?.id?.toString() ?: "") }
     var assistantMenuExpanded by remember { mutableStateOf(false) }
 
-    val timeValid = time.matches(Regex("""\d{1,2}:\d{2}"""))
+    // 格式 + 范围双校验: \d{1,2}:\d{2} 会放过 99:99, Calendar lenient 会把 99 小时溢出到数天后
+    val timeValid = time.matches(Regex("""\d{1,2}:\d{2}""")) && time.split(':').let {
+        (it.getOrNull(0)?.toIntOrNull() ?: -1) in 0..23 && (it.getOrNull(1)?.toIntOrNull() ?: -1) in 0..59
+    }
     val intervalValid = interval.toIntOrNull()?.let { it >= 15 } == true
     val valid = title.isNotBlank() && prompt.isNotBlank() && assistantId.isNotBlank() &&
             when (type) {
@@ -293,7 +296,11 @@ private fun CreateScheduledTaskDialog(
             TextButton(
                 enabled = valid,
                 onClick = {
-                    val (h, m) = time.split(':').let { (it.getOrNull(0)?.toIntOrNull() ?: 8) to (it.getOrNull(1)?.toIntOrNull() ?: 0) }
+                    // 范围兜底: 即使 timeValid 误判, 入库的 timeMinutes 也必须落在 0..1439
+                    val (h, m) = time.split(':').let {
+                        ((it.getOrNull(0)?.toIntOrNull() ?: 8).coerceIn(0, 23)) to
+                            ((it.getOrNull(1)?.toIntOrNull() ?: 0).coerceIn(0, 59))
+                    }
                     onCreate(
                         ScheduledTaskEntity(
                             id = Uuid.random().toString(),

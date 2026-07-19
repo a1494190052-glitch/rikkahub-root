@@ -18,6 +18,7 @@ import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import me.rerere.ai.core.InputSchema
 import me.rerere.ai.core.Tool
+import me.rerere.ai.ui.MessageRole
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
 import me.rerere.rikkahub.data.ai.GenerationChunk
@@ -102,7 +103,8 @@ class SubAgentExecutor(
             presetMessages = emptyList(),
             modeInjectionIds = emptySet(),
         )
-        val tools = localTools.getTools(worker.localTools)
+        // 子代理用无持久会话的工具集: 并行子代理共享持久 root 会话会互相污染 cwd
+        val tools = localTools.forSubAgent().getTools(worker.localTools)
 
         val finalChunk = withTimeout(TIMEOUT_MS) {
             generationHandler.generateText(
@@ -118,6 +120,25 @@ class SubAgentExecutor(
         val finalMessages = (finalChunk as? GenerationChunk.Messages)?.messages ?: emptyList()
         val output = finalMessages.lastOrNull()?.toText()?.trim().orEmpty()
         val rounds = finalMessages.size - 1 // 减去用户任务消息 ≈ 生成轮数
+        // 死胡同检测：最后一条 assistant 消息含有未执行的工具调用
+        // （典型为本地工具审批悬置，子代理无人可批准 → 生成循环提前结束）
+        val lastAssistant = finalMessages.lastOrNull { it.role == MessageRole.ASSISTANT }
+        val pendingToolNames = lastAssistant?.parts
+            ?.filterIsInstance<UIMessagePart.Tool>()
+            ?.filter { !it.isExecuted }
+            ?.map { it.toolName }
+            .orEmpty()
+        if (pendingToolNames.isNotEmpty()) {
+            return SubResult(
+                role = task.role,
+                ok = false,
+                output = output,
+                error = "子代理结束于未完成的工具调用 ${pendingToolNames.joinToString()}（可能是本地工具审批悬置，子代理无人批准）。建议在子代理任务描述中改用只读/自动批准的工具。",
+                model = task.model,
+                rounds = rounds.coerceAtLeast(1),
+                elapsedMs = System.currentTimeMillis() - started,
+            )
+        }
         return SubResult(
             role = task.role,
             ok = true,
@@ -135,6 +156,7 @@ class SubAgentExecutor(
         - 专注完成分配给你的子任务，直接输出最终成果，不要寒暄、不要汇报过程、不要复述任务
         - 你看不到团队的对话历史，任务描述里包含了你需要的全部信息
         - 如需调用工具，请高效规划（最多 $MAX_STEPS 轮工具调用）
+        - 若工具返回审批/权限错误，你无法获得人工批准——立即换用其他自动批准的工具或在结果中说明受阻原因，不要重复尝试同一工具
         - 输出必须完整、自包含——主管会把你的成果整合进最终答案，不会再来追问你
     """.trimIndent()
 
@@ -164,7 +186,10 @@ internal fun buildHireAgentTool(executor: SubAgentExecutor, parent: Assistant): 
     name = "hire_agent",
     description = """
         Hire ONE sub-agent (independent AI worker) to complete a subtask autonomously.
-        The sub-agent has a clean context (CANNOT see this conversation) and inherits your enabled tools.
+        The sub-agent has a clean context (CANNOT see this conversation) and inherits your enabled LOCAL tools only
+        (shell, workspace files, memory, schedule etc. — NO web search, MCP, or other remote tools).
+        Local tools requiring user approval will dead-end inside a sub-agent (no one can approve);
+        write tasks so read-only/auto-approved tools suffice.
         Use for decomposable work: research from multiple angles, drafting sections, comparing options.
         IMPORTANT: 'task' must be fully self-contained with all necessary context.
         For 2+ independent subtasks, prefer hire_team (parallel, much faster).

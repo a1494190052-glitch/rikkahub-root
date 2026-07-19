@@ -3,24 +3,29 @@ package me.rerere.workspace
 import java.io.File
 import java.io.IOException
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.locks.ReentrantLock
 import java.util.regex.Pattern
+import kotlin.random.Random
 
 /**
  * 持久 Shell 会话: 维持一个长生命周期的 shell 进程(非交互模式, stdin 保持打开),
  * 命令逐条写入执行, 因此 cd / export / 后台进程(&)都会跨命令保留.
  *
- * 命令边界协议: 每条命令后追加一行 sentinel 输出:
- *   printf '\n__RIKKA_EOF__%s__%s__\n' "$?" "$PWD"
- * reader 线程持续读 stdout 到共享缓冲, exec 等待 sentinel 出现并解析 exitCode 与 cwd.
+ * 命令边界协议: 每条命令后追加一行带随机 nonce 的 sentinel 输出:
+ *   printf '\n__RIKKA_EOF_<nonce>_%s__%s__\n' "$?" "$PWD"
+ * nonce 防止命令自身输出伪造边界. reader 线程持续读 stdout 到共享缓冲,
+ * exec 等待 sentinel 出现并解析 exitCode 与 cwd.
  *
  * 注意:
  *  - stderr 合并进 stdout (交互式 shell 无法可靠分流).
  *  - 命令若读取 stdin (cat/read 等) 或引号未闭合, 会吞掉后续输入 — 超时后整个会话销毁重建.
- *  - 超时策略: 销毁会话进程(命令可能仍在跑, 但进程组随 --kill-on-exit / destroyForcibly 回收).
+ *  - exec 前清空共享缓冲: 后台进程的持续输出不会把下一次 exec 的 mark 顶越界.
  */
 class PersistentShellSession private constructor(
     private val process: Process,
     private val tag: String,
+    private val nonce: String,
+    private val killTreeWithSu: Boolean,
 ) {
     private val buffer = StringBuilder()
     private val lock = Object()
@@ -33,6 +38,12 @@ class PersistentShellSession private constructor(
     var currentCwd: String = ""
         private set
 
+    private val sentinelPattern: Pattern =
+        Pattern.compile("__RIKKA_EOF_${nonce}_(\\d+)__([^\\n]*?)__\\n")
+
+    private val sentinelCmd =
+        "printf '\\n__RIKKA_EOF_${nonce}_%s__%s__\\n' \"\$?\" \"\$PWD\""
+
     private val readerThread = Thread {
         try {
             process.inputStream.bufferedReader().use { reader ->
@@ -42,7 +53,7 @@ class PersistentShellSession private constructor(
                     if (read < 0) break
                     synchronized(lock) {
                         buffer.append(chunk, 0, read)
-                        // 防御: 缓冲超过 4MB 时丢弃最旧的一半(忘记收割的长输出)
+                        // 防御: 缓冲超过 4MB 时丢弃最旧的一半(exec 开头会清空, 这里只兜底)
                         if (buffer.length > MAX_BUFFER_CHARS) {
                             buffer.delete(0, buffer.length / 2)
                         }
@@ -71,14 +82,16 @@ class PersistentShellSession private constructor(
         if (dead) {
             return WorkspaceCommandResult(-1, "", "shell session is dead", timedOut = false)
         }
-        val mark = synchronized(lock) { buffer.length }
+        // 清空缓冲并从 0 开始定位: 后台进程残留输出不会干扰本次 mark
+        synchronized(lock) { buffer.setLength(0) }
+        val mark = 0
         try {
             val payload = buildString {
                 if (!cwd.isNullOrBlank()) {
                     append("cd -- ").append(shellQuote(cwd)).append('\n')
                 }
                 append(command).append('\n')
-                append(SENTINEL_CMD).append('\n')
+                append(sentinelCmd).append('\n')
             }
             synchronized(lock) {
                 process.outputStream.write(payload.toByteArray(Charsets.UTF_8))
@@ -93,24 +106,21 @@ class PersistentShellSession private constructor(
         while (true) {
             // synchronized 是 inline 函数, 允许在块内直接 return
             synchronized(lock) {
-                val found = SENTINEL_PATTERN.matcher(buffer)
+                val found = sentinelPattern.matcher(buffer)
                 found.region(mark, buffer.length)
                 if (found.find()) {
                     val output = buffer.substring(mark, found.start())
                     buffer.delete(mark, found.end())
                     currentCwd = found.group(2)?.trim().orEmpty()
-                    return WorkspaceCommandResult(
+                    return buildResult(
                         exitCode = found.group(1)?.toIntOrNull() ?: -1,
-                        stdout = output.trimEnd('\n'),
-                        stderr = "",
-                        timedOut = false,
-                        truncated = false,
+                        rawOutput = output,
                     )
                 }
                 if (dead) {
                     val leftover = buffer.substring(mark.coerceAtMost(buffer.length))
                     buffer.setLength(0)
-                    return WorkspaceCommandResult(-1, leftover, "shell session terminated", timedOut = false)
+                    return WorkspaceCommandResult(-1, capOutput(leftover), "shell session terminated", timedOut = false)
                 }
                 if (System.currentTimeMillis() >= deadline) {
                     val partial = buffer.substring(mark.coerceAtMost(buffer.length))
@@ -118,7 +128,7 @@ class PersistentShellSession private constructor(
                     destroy()
                     return WorkspaceCommandResult(
                         exitCode = -1,
-                        stdout = partial,
+                        stdout = capOutput(partial),
                         stderr = "command timed out after ${timeoutMillis}ms; shell session was killed and will be recreated on next call",
                         timedOut = true,
                     )
@@ -136,27 +146,95 @@ class PersistentShellSession private constructor(
         }
     }
 
+    /** 输出上限截断(头+尾), 防止超大输出撑爆 LLM 上下文 */
+    private fun buildResult(exitCode: Int, rawOutput: String): WorkspaceCommandResult {
+        val trimmed = rawOutput.trimEnd('\n')
+        val (capped, truncated) = capOutputWithFlag(trimmed)
+        return WorkspaceCommandResult(
+            exitCode = exitCode,
+            stdout = capped,
+            stderr = "",
+            timedOut = false,
+            truncated = truncated,
+        )
+    }
+
+    private fun capOutput(text: String): String = capOutputWithFlag(text).first
+
+    private fun capOutputWithFlag(text: String): Pair<String, Boolean> {
+        if (text.length <= MAX_OUTPUT_CHARS) return text to false
+        val head = text.take(HEAD_CHARS)
+        val tail = text.takeLast(TAIL_CHARS)
+        val omitted = text.length - HEAD_CHARS - TAIL_CHARS
+        return "$head\n... [省略中间 $omitted 字符] ...\n$tail" to true
+    }
+
     fun destroy() {
         dead = true
+        // 先让 shell 自然退出: 关闭 stdin 的同时补一条 exit, 多数 shell 会立即终止
         try {
+            process.outputStream.write("exit\n".toByteArray())
+            process.outputStream.flush()
             process.outputStream.close()
         } catch (_: IOException) {
         }
-        process.destroyForcibly()
+        // 温和 destroy(给进程组退出机会)
+        process.destroy()
+        val exited = try {
+            process.waitFor(300, java.util.concurrent.TimeUnit.MILLISECONDS)
+        } catch (_: InterruptedException) {
+            false
+        }
+        if (!exited && killTreeWithSu) {
+            // su 会话: destroy 只杀 su 客户端进程, root shell 及其子孙会变孤儿常驻。
+            // 借另一个 su 命令按 /proc 的 ppid 链递归杀整棵进程树。
+            killTreeAsRoot()
+        }
+        if (process.isAlive) {
+            process.destroyForcibly()
+        }
         synchronized(lock) { lock.notifyAll() }
+    }
+
+    /** 用 root 权限递归杀进程树(仅 su 会话兜底用) */
+    private fun killTreeAsRoot() {
+        val pid = runCatching { process.pid() }.getOrNull() ?: return
+        // /proc/<pid>/stat 第 4 列是 ppid; comm 列可能含空格, 用 ')' 之后的内容解析更稳
+        val script = """
+            killtree() {
+              p=${'$'}1
+              for f in /proc/[0-9]*/stat; do
+                ppid=${'$'}(awk -F')' '{print ${'$'}2}' ${'$'}f 2>/dev/null | awk '{print ${'$'}2}')
+                [ "${'$'}ppid" = "${'$'}p" ] && killtree ${'$'}(basename ${'$'}f /stat)
+              done
+              kill -9 ${'$'}p 2>/dev/null
+            }
+            killtree $pid
+        """.trimIndent()
+        runCatching {
+            val killer = Runtime.getRuntime().exec(arrayOf("su", "-c", script))
+            if (!killer.waitFor(2, java.util.concurrent.TimeUnit.SECONDS)) {
+                killer.destroyForcibly()
+            }
+        }
     }
 
     companion object {
         private const val MAX_BUFFER_CHARS = 4 * 1024 * 1024
-        private const val SENTINEL_CMD = "printf '\\n__RIKKA_EOF__%s__%s__\\n' \"\$?\" \"\$PWD\""
-        private val SENTINEL_PATTERN: Pattern =
-            Pattern.compile("__RIKKA_EOF__(\\d+)__([^\\n]*?)__\\n")
+        private const val MAX_OUTPUT_CHARS = 128 * 1024
+        private const val HEAD_CHARS = MAX_OUTPUT_CHARS * 3 / 4
+        private const val TAIL_CHARS = MAX_OUTPUT_CHARS - HEAD_CHARS
 
-        fun start(tag: String, builder: ProcessBuilder): PersistentShellSession {
+        fun start(
+            tag: String,
+            builder: ProcessBuilder,
+            killTreeWithSu: Boolean = false,
+        ): PersistentShellSession {
             val process = builder
                 .redirectErrorStream(true)
                 .start()
-            return PersistentShellSession(process, tag)
+            val nonce = (1..8).map { "abcdefghijklmnopqrstuvwxyz0123456789"[Random.nextInt(36)] }.joinToString("")
+            return PersistentShellSession(process, tag, nonce, killTreeWithSu)
         }
 
         private fun shellQuote(path: String): String =
@@ -166,6 +244,7 @@ class PersistentShellSession private constructor(
 
 /**
  * 持久会话注册表: 按 workspace (或宿主机 root) 复用会话, 空闲超时回收.
+ * per-key 锁: 同一会话串行执行, 不同会话并行, 且锁可中断(协程取消生效).
  */
 class ShellSessionManager(
     private val baseDir: File,
@@ -176,6 +255,8 @@ class ShellSessionManager(
 ) {
     private val sessions = ConcurrentHashMap<String, PersistentShellSession>()
     private val lastUsedAt = ConcurrentHashMap<String, Long>()
+    private val locks = ConcurrentHashMap<String, ReentrantLock>()
+    private val createLock = Any()
 
     /**
      * 在持久会话中执行命令.
@@ -183,27 +264,34 @@ class ShellSessionManager(
      * @param cwd 相对 workspace files 区的目录(proot 模式映射到 /workspace 下, root 模式映射为真实路径);
      *            null 保持会话当前目录
      */
-    @Synchronized
     fun exec(
         root: String?,
         command: String,
         cwd: String?,
         timeoutMillis: Long,
     ): WorkspaceCommandResult {
-        val key = if (root == null) HOST_KEY else "ws:$root"
-        var session = sessions[key]
-        if (session == null || session.dead) {
-            session?.destroy()
-            session = createSession(root)
-            sessions[key] = session
+        val key = sessionKey(root)
+        val keyLock = locks.getOrPut(key) { ReentrantLock(true) }
+        // lockInterruptibly: runInterruptible 取消时能打断, 避免被取消的命令仍继续执行
+        keyLock.lockInterruptibly()
+        try {
+            var session = sessions[key]
+            if (session == null || session.dead) {
+                session?.destroy()
+                session = synchronized(createLock) {
+                    sessions[key]?.takeIf { !it.dead } ?: createSession(root).also { sessions[key] = it }
+                }
+            }
+            lastUsedAt[key] = System.currentTimeMillis()
+            val mappedCwd = mapCwd(root, cwd)
+            val result = session.exec(command, mappedCwd, timeoutMillis)
+            if (session.dead) {
+                sessions.remove(key)
+            }
+            return result
+        } finally {
+            keyLock.unlock()
         }
-        lastUsedAt[key] = System.currentTimeMillis()
-        val mappedCwd = mapCwd(root, cwd)
-        val result = session.exec(command, mappedCwd, timeoutMillis)
-        if (session.dead) {
-            sessions.remove(key)
-        }
-        return result
     }
 
     /** 宿主机 root 模式持久会话 (root_shell 工具用) */
@@ -212,14 +300,18 @@ class ShellSessionManager(
 
     /** 该 root 是否已有存活会话(用于决定是否应用默认 cwd) */
     fun hasSession(root: String?): Boolean {
-        val key = if (root == null) HOST_KEY else "ws:$root"
-        return sessions[key]?.dead == false
+        return sessions[sessionKey(root)]?.dead == false
     }
 
     /** 会话当前目录(来自最近一次 sentinel 的 $PWD) */
     fun currentCwd(root: String?): String {
-        val key = if (root == null) HOST_KEY else "ws:$root"
-        return sessions[key]?.currentCwd.orEmpty()
+        return sessions[sessionKey(root)]?.currentCwd.orEmpty()
+    }
+
+    /** 会话 key 携带执行模式: root 模式切换后旧 proot 会话不会被误用 */
+    private fun sessionKey(root: String?): String {
+        val mode = if (isRootMode()) "su" else "proot"
+        return if (root == null) "host_root" else "ws:$mode:$root"
     }
 
     private fun mapCwd(root: String?, cwd: String?): String? {
@@ -241,7 +333,12 @@ class ShellSessionManager(
             val builder = ProcessBuilder("su")
             val dir = initialHostDir(root)
             if (dir != null && dir.isDirectory) builder.directory(dir)
-            PersistentShellSession.start(tag = if (root == null) "host-root" else "root:$root", builder = builder)
+            // su 会话: destroy 杀不掉 root 子进程树, 需要 su 兜底清理, 防止 root 进程成孤儿
+            PersistentShellSession.start(
+                tag = if (root == null) "host-root" else "root:$root",
+                builder = builder,
+                killTreeWithSu = true,
+            )
         } else {
             createProotSession(root)
         }
@@ -325,8 +422,11 @@ class ShellSessionManager(
     }
 
     fun close(root: String) {
-        sessions.remove("ws:$root")?.destroy()
-        lastUsedAt.remove("ws:$root")
+        // 两种模式的会话都关掉
+        listOf("ws:su:$root", "ws:proot:$root").forEach { key ->
+            sessions.remove(key)?.destroy()
+            lastUsedAt.remove(key)
+        }
     }
 
     fun closeAll() {
@@ -338,7 +438,6 @@ class ShellSessionManager(
     private fun isRootMode(): Boolean = rootModeProvider()
 
     companion object {
-        private const val HOST_KEY = "host_root"
         const val IDLE_TIMEOUT_MS = 10 * 60 * 1000L
     }
 }

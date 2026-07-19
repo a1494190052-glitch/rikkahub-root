@@ -6,7 +6,9 @@ import android.content.Intent
 import android.util.Log
 import kotlinx.coroutines.flow.first
 import me.rerere.ai.provider.ProviderManager
+import me.rerere.ai.ui.MessageRole
 import me.rerere.ai.ui.UIMessage
+import me.rerere.ai.ui.UIMessagePart
 import me.rerere.rikkahub.data.datastore.SettingsStore
 import me.rerere.rikkahub.data.datastore.findModelById
 import me.rerere.rikkahub.data.datastore.findProvider
@@ -61,7 +63,14 @@ class ScheduledTaskExecutor(
 
     private suspend fun executeTask(task: ScheduledTaskEntity) {
         val settings = settingsStore.settingsFlow.first()
-        val assistant = settings.assistants.find { it.id.toString() == task.assistantId } ?: return
+        val assistant = settings.assistants.find { it.id.toString() == task.assistantId }
+        if (assistant == null) {
+            // 助手已被删除: 通知用户并自动停用任务, 防止静默空转
+            notifyUser(task, "定时任务", "任务已自动停用：绑定的助手已被删除")
+            scheduledTaskDao.setEnabled(task.id, false)
+            TaskScheduler.cancel(context, task.id)
+            return
+        }
 
         // SHELL 类型: prompt 作为 root shell 命令执行, 输出落会话+通知
         if (task.actionType == ScheduledTaskEntity.ACTION_SHELL) {
@@ -69,7 +78,11 @@ class ScheduledTaskExecutor(
             return
         }
 
-        val model = settings.findModelById(assistant.chatModelId, fallback = settings.fastModelId) ?: return
+        val model = settings.findModelById(assistant.chatModelId, fallback = settings.fastModelId)
+        if (model == null) {
+            notifyUser(task, assistant.name, "任务执行失败：找不到可用模型，请检查助手的模型配置")
+            return
+        }
         val provider = model.findProvider(settings.providers) ?: return
         val handler = providerManager.getProviderByType(provider)
 
@@ -77,8 +90,26 @@ class ScheduledTaskExecutor(
         val existing = task.conversationId?.let { cid ->
             runCatching { conversationRepo.getConversationById(Uuid.parse(cid)) }.getOrNull()
         }
+        // 任务专属会话的历史（延续上下文）
+        // 必须剥离 tool 相关消息: 定时生成不走工具循环, 携带 toolCalls/孤立 tool 结果
+        // 会让部分 provider 直接 400
+        val existing = task.conversationId?.let { cid ->
+            runCatching { conversationRepo.getConversationById(Uuid.parse(cid)) }.getOrNull()
+        }
         val history = existing?.messageNodes
             ?.mapNotNull { node -> runCatching { node.currentMessage }.getOrNull() }
+            ?.filter { it.role != MessageRole.TOOL }
+            ?.map { msg ->
+                if (msg.role == MessageRole.ASSISTANT) {
+                    msg.copy(
+                        parts = msg.parts.filterNot {
+                            it is UIMessagePart.Tool || it is UIMessagePart.ToolCall || it is UIMessagePart.ToolResult
+                        }
+                    )
+                } else msg
+            }
+            // 剥掉工具部分后空壳 assistant 消息一并丢弃
+            ?.filter { it.role != MessageRole.ASSISTANT || it.parts.isNotEmpty() }
             ?.takeLast(HISTORY_LIMIT)
             .orEmpty()
 
@@ -106,15 +137,40 @@ class ScheduledTaskExecutor(
         task: ScheduledTaskEntity,
         assistant: me.rerere.rikkahub.data.model.Assistant,
     ) {
+        // 安全闸门双保险(创建时已拦, 执行前再拦一次防御老任务/数据篡改)
+        me.rerere.rikkahub.data.ai.tools.local.ShellSafety.blockReason(task.prompt)?.let { reason ->
+            val msg = "[已拦截] 命令命中安全闸门，未执行: $reason"
+            auditLogger.logCompleted(
+                source = me.rerere.rikkahub.data.db.entity.ShellAuditEntity.SOURCE_SCHEDULED_TASK,
+                command = task.prompt,
+                status = me.rerere.rikkahub.data.db.entity.ShellAuditEntity.STATUS_BLOCKED,
+                outputPreview = msg,
+            )
+            scheduledTaskDao.setEnabled(task.id, false)
+            TaskScheduler.cancel(context, task.id)
+            notifyUser(task, assistant.name, msg + "\n任务已自动停用。")
+            return
+        }
+
         val startedAt = System.currentTimeMillis()
         val auditId = auditLogger.start(
             source = me.rerere.rikkahub.data.db.entity.ShellAuditEntity.SOURCE_SCHEDULED_TASK,
             command = task.prompt,
         )
-        val result = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-            kotlinx.coroutines.runInterruptible {
-                me.rerere.workspace.RootShellRunner().execute(task.prompt, SHELL_TASK_TIMEOUT_MS)
+        val result = try {
+            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                kotlinx.coroutines.runInterruptible {
+                    me.rerere.workspace.RootShellRunner().execute(task.prompt, SHELL_TASK_TIMEOUT_MS)
+                }
             }
+        } catch (e: Throwable) {
+            // 审计兜底: 异常也必须 finish, 否则记录永远停在 running
+            auditLogger.finish(
+                auditId, startedAt,
+                me.rerere.rikkahub.data.db.entity.ShellAuditEntity.STATUS_ERROR,
+                null, e.message,
+            )
+            throw e
         }
         val output = buildString {
             append("$ ").append(task.prompt).append("\n\n")

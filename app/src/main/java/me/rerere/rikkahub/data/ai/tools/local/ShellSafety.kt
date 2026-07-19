@@ -15,7 +15,7 @@ object ShellSafety {
     /** 命中即拒绝执行的高危模式(对整条命令全文匹配) */
     private val BLOCKED_PATTERNS: List<Pair<Regex, String>> = listOf(
         // rm -rf / 或 rm -rf /* 或递归删除系统目录
-        Regex("""\brm\s+[^;&|]*-[a-zA-Z]*[rf][a-zA-Z]*\s+(--\S+\s+)*(/\*|/|/system|/vendor|/data(/|\s|$)|/boot|/proc|/dev|/etc|/lib|/lib64|/bin|/sbin|/product|/storage/emulated/0\s*$)""") to "recursive delete of system-critical path",
+        Regex("""\brm\s+[^;&|]*-[a-zA-Z]*[rf][a-zA-Z]*\s+(--\S+\s+)*(/\*?|/(system|vendor|boot|proc|dev|etc|lib|lib64|bin|sbin|product|data|storage/emulated/0)(/|\s|$))""") to "recursive delete of system-critical path",
         // dd 写块设备
         Regex("""\bdd\b[^;&|]*\bof=/dev/(block|sd[a-z]|mmcblk|mapper)""") to "dd writing to block device",
         // 文件系统格式化/分区
@@ -96,7 +96,8 @@ object ShellSafety {
 
     fun classify(command: String): ShellRisk {
         blockReason(command)?.let { return ShellRisk.BLOCKED }
-        // 含重定向写入/命令替换时整体提级(保守)
+        // 命令替换 $(...)/反引号(引号外): 内部可能藏任意命令, 保守提级 WRITE
+        if (hasCommandSubstitution(command)) return ShellRisk.WRITE
         val segments = splitSegments(command)
         var hasWrite = false
         for (segment in segments) {
@@ -108,6 +109,27 @@ object ShellSafety {
         // 整串含输出重定向(不在引号内的检测从简) → WRITE
         if (REDIRECT_WRITE_REGEX.containsMatchIn(command)) return ShellRisk.WRITE
         return ShellRisk.READ_ONLY
+    }
+
+    /** 检测引号外的 $( 或反引号命令替换 */
+    private fun hasCommandSubstitution(command: String): Boolean {
+        var quote: Char? = null
+        var i = 0
+        while (i < command.length) {
+            val c = command[i]
+            when {
+                quote != null -> {
+                    // 双引号内的 $( 和 ` 仍会被 shell 展开, 单引号内不展开
+                    if (c == quote) quote = null
+                    else if (quote == '"' && (c == '`' || (c == '$' && i + 1 < command.length && command[i + 1] == '('))) return true
+                }
+                c == '\'' || c == '"' -> quote = c
+                c == '`' -> return true
+                c == '$' && i + 1 < command.length && command[i + 1] == '(' -> return true
+            }
+            i++
+        }
+        return false
     }
 
     /** 若命令命中高危模式, 返回拒绝原因; 否则 null */
@@ -140,6 +162,11 @@ object ShellSafety {
                     segments += current.toString()
                     current.clear()
                     if (i + 1 < command.length && command[i + 1] == '&') i++
+                }
+                c == '\n' || c == '\r' -> {
+                    // 换行与分号等价: 防 "ls\npm uninstall x" 之类的分段绕过
+                    segments += current.toString()
+                    current.clear()
                 }
                 c == '&' -> {
                     if (i + 1 < command.length && command[i + 1] == '&') {

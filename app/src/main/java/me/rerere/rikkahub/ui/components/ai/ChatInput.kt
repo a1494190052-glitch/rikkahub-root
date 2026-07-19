@@ -713,6 +713,8 @@ private fun QuickRepliesBar(
                 shape = RoundedCornerShape(50),
                 color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.75f),
                 modifier = Modifier.combinedClickable(
+                    // 关闭默认长按震动, 与下方手动反馈去重(否则长按震两次)
+                    hapticFeedbackEnabled = false,
                     onClick = { onFill(qm.content) },
                     onLongClick = {
                         haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)

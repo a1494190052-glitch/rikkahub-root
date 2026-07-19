@@ -79,6 +79,10 @@ internal fun buildCreateScheduleTool(repo: ScheduledTaskRepository, assistant: A
             required = listOf("title", "prompt", "type")
         )
     },
+    needsApproval = { json ->
+        // SHELL 任务以 root 执行命令: 强制用户审批
+        json.jsonObject["action_type"]?.jsonPrimitive?.contentOrNull?.uppercase() == "SHELL"
+    },
     execute = { args ->
         val obj = args.jsonObject
         val title = obj["title"]?.jsonPrimitive?.contentOrNull
@@ -101,7 +105,15 @@ internal fun buildCreateScheduleTool(repo: ScheduledTaskRepository, assistant: A
         // 参数校验
         val err = when (type) {
             ScheduledTaskEntity.TYPE_DAILY -> if (timeMinutes == null) "DAILY 需要 time (HH:mm)" else null
-            ScheduledTaskEntity.TYPE_WEEKLY -> if (timeMinutes == null) "WEEKLY 需要 time (HH:mm)" else null
+            ScheduledTaskEntity.TYPE_WEEKLY -> {
+                val days = obj["weekdays"]?.jsonPrimitive?.contentOrNull.orEmpty()
+                val valid = days.split(',').filter { it.isNotBlank() }.all { it.trim().toIntOrNull() in 1..7 }
+                when {
+                    timeMinutes == null -> "WEEKLY 需要 time (HH:mm)"
+                    days.isBlank() || !valid -> "WEEKLY 需要 weekdays（1=周一..7=周日，逗号分隔，如 1,3,5）"
+                    else -> null
+                }
+            }
             ScheduledTaskEntity.TYPE_INTERVAL ->
                 if (interval == null || interval < 15) "INTERVAL 需要 interval_minutes 且 >= 15" else null
             ScheduledTaskEntity.TYPE_ONCE ->
@@ -113,6 +125,13 @@ internal fun buildCreateScheduleTool(repo: ScheduledTaskRepository, assistant: A
         val actionType = obj["action_type"]?.jsonPrimitive?.contentOrNull?.uppercase()
             ?.takeIf { it == ScheduledTaskEntity.ACTION_SHELL }
             ?: ScheduledTaskEntity.ACTION_LLM
+
+        // SHELL 命令过安全闸门: 高危命令直接拒绝创建
+        if (actionType == ScheduledTaskEntity.ACTION_SHELL) {
+            ShellSafety.blockReason(prompt)?.let { reason ->
+                return@Tool listOf(UIMessagePart.Text("错误: 命令被安全闸门拦截，未创建: $reason"))
+            }
+        }
 
         val task = ScheduledTaskEntity(
             id = Uuid.random().toString(),
@@ -159,8 +178,19 @@ internal fun buildDeleteScheduleTool(repo: ScheduledTaskRepository, assistant: A
     execute = { args ->
         val id = args.jsonObject["id"]?.jsonPrimitive?.contentOrNull
             ?: return@Tool listOf(UIMessagePart.Text("错误: 缺少 id"))
-        val task = repo.getAll().firstOrNull { it.id == id || it.id.startsWith(id) }
-            ?: return@Tool listOf(UIMessagePart.Text("未找到任务: $id"))
+        if (id.length < 4) return@Tool listOf(UIMessagePart.Text("错误: id 前缀至少 4 位"))
+        // 只允许操作当前助手的任务(防跨助手越权)
+        val mine = repo.getAll().filter { it.assistantId == assistant.id.toString() }
+        val matches = mine.filter { it.id == id || it.id.startsWith(id) }
+        when {
+            matches.isEmpty() -> return@Tool listOf(UIMessagePart.Text("未找到任务: $id"))
+            matches.size > 1 -> return@Tool listOf(
+                UIMessagePart.Text("id 前缀匹配到 ${matches.size} 个任务，请提供更长的 id：
+" + matches.joinToString("
+") { formatTask(it) })
+            )
+        }
+        val task = matches.first()
         repo.delete(task.id)
         listOf(UIMessagePart.Text("已删除定时任务「${task.title}」。"))
     }
@@ -183,8 +213,16 @@ internal fun buildToggleScheduleTool(repo: ScheduledTaskRepository, assistant: A
             ?: return@Tool listOf(UIMessagePart.Text("错误: 缺少 id"))
         val enabled = args.jsonObject["enabled"]?.jsonPrimitive?.contentOrNull?.toBooleanStrictOrNull()
             ?: return@Tool listOf(UIMessagePart.Text("错误: 缺少 enabled (true/false)"))
-        val task = repo.getAll().firstOrNull { it.id == id || it.id.startsWith(id) }
-            ?: return@Tool listOf(UIMessagePart.Text("未找到任务: $id"))
+        if (id.length < 4) return@Tool listOf(UIMessagePart.Text("错误: id 前缀至少 4 位"))
+        val mine = repo.getAll().filter { it.assistantId == assistant.id.toString() }
+        val matches = mine.filter { it.id == id || it.id.startsWith(id) }
+        when {
+            matches.isEmpty() -> return@Tool listOf(UIMessagePart.Text("未找到任务: $id"))
+            matches.size > 1 -> return@Tool listOf(
+                UIMessagePart.Text("id 前缀匹配到 ${matches.size} 个任务，请提供更长的 id。")
+            )
+        }
+        val task = matches.first()
         repo.setEnabled(task.id, enabled)
         listOf(UIMessagePart.Text("已${if (enabled) "启用" else "停用"}定时任务「${task.title}」。"))
     }

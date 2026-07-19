@@ -174,6 +174,23 @@ class WorkspaceRepository(
     }
 
     /**
+     * 按存储区写文本（直接文件 IO）。
+     * 与 fileSize/exportFile 同路径，root 模式下也写到 workspace 目录内，
+     * 不会像 rootfs shell 命令那样落到宿主机真实路径。
+     */
+    suspend fun writeTextInArea(
+        id: String,
+        area: WorkspaceStorageArea,
+        path: String,
+        text: String,
+        overwrite: Boolean,
+    ): WorkspaceFileEntry = withContext(Dispatchers.IO) {
+        val workspace = dao.getById(id) ?: error("Workspace not found: $id")
+        manager.ensureWorkspace(workspace.root)
+        manager.writeTextInArea(workspace.root, path, text, overwrite, area)
+    }
+
+    /**
      * 读取文本用于应用内预览/编辑, 支持两个存储区.
      * FILES 区走 [WorkspaceManager.readText] (自带大小保护); LINUX 区通过 exportFile 读入内存,
      * 因此这里对 LINUX 区显式做大小限制, 避免大文件撑爆内存.

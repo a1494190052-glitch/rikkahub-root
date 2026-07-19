@@ -44,8 +44,29 @@ object TaskScheduler {
         tasks.filter { it.enabled }.forEach { schedule(context, it) }
     }
 
+    /**
+     * 重排前清理僵尸 ONCE 任务（触发时间已过且从未执行：创建于过去、关机错过闹钟）。
+     * 这类任务 computeNextTrigger 返回 null 永不排期，不停用会一直显示"启用"却不跑。
+     */
+    suspend fun rescheduleAllWithCleanup(context: Context, repo: ScheduledTaskRepository) {
+        val tasks = repo.getEnabled()
+        val now = System.currentTimeMillis()
+        val alive = tasks.filter { task ->
+            val expiredOnce = task.type == ScheduledTaskEntity.TYPE_ONCE &&
+                task.startAt <= now && task.lastRunAt == 0L
+            if (expiredOnce) {
+                runCatching { repo.setEnabled(task.id, false) }
+                Log.i(TAG, "expired ONCE task disabled: ${task.title}")
+            }
+            !expiredOnce
+        }
+        rescheduleAll(context, alive)
+    }
+
     private fun pendingIntent(context: Context, taskId: String): PendingIntent {
         val intent = Intent(context, TaskAlarmReceiver::class.java).apply {
+            // data 参与 PendingIntent 唯一性判定: 防止两个 taskId 的 hashCode 碰撞时互相覆盖闹钟
+            data = android.net.Uri.parse("rikkahub://scheduled_task/$taskId")
             putExtra(EXTRA_TASK_ID, taskId)
         }
         return PendingIntent.getBroadcast(
@@ -61,6 +82,8 @@ object TaskScheduler {
                 if (task.startAt > now && task.lastRunAt == 0L) task.startAt else null
 
             ScheduledTaskEntity.TYPE_INTERVAL -> {
+                // intervalMinutes<=0 时 while 循环永不退出, 兜底视为不可排期
+                if (task.intervalMinutes <= 0) return null
                 val base = maxOf(task.lastRunAt, task.createdAt, 0L)
                 var next = base + task.intervalMinutes * 60_000L
                 while (next <= now) next += task.intervalMinutes * 60_000L
@@ -75,13 +98,18 @@ object TaskScheduler {
         }
     }
 
+    /** 归一化到 0..1439, 防历史脏数据(如 99:99)经 Calendar lenient 溢出到数天后 */
+    private fun normalizeTimeMinutes(timeMinutes: Int): Int =
+        ((timeMinutes % 1440) + 1440) % 1440
+
     private fun nextDailyTime(timeMinutes: Int, now: Long): Long {
+        val normalized = normalizeTimeMinutes(timeMinutes)
         val cal = Calendar.getInstance().apply {
             timeInMillis = now
             set(Calendar.SECOND, 0)
             set(Calendar.MILLISECOND, 0)
-            set(Calendar.HOUR_OF_DAY, timeMinutes / 60)
-            set(Calendar.MINUTE, timeMinutes % 60)
+            set(Calendar.HOUR_OF_DAY, normalized / 60)
+            set(Calendar.MINUTE, normalized % 60)
         }
         if (cal.timeInMillis <= now) cal.add(Calendar.DAY_OF_YEAR, 1)
         return cal.timeInMillis
@@ -90,6 +118,7 @@ object TaskScheduler {
     private fun nextWeeklyTime(timeMinutes: Int, weekDays: String, now: Long): Long? {
         val days = weekDays.split(',').mapNotNull { it.trim().toIntOrNull() }.filter { it in 1..7 }
         if (days.isEmpty()) return null
+        val normalized = normalizeTimeMinutes(timeMinutes)
         var best: Long? = null
         for (offset in 0..8) {
             val cal = Calendar.getInstance().apply {
@@ -97,8 +126,8 @@ object TaskScheduler {
                 add(Calendar.DAY_OF_YEAR, offset)
                 set(Calendar.SECOND, 0)
                 set(Calendar.MILLISECOND, 0)
-                set(Calendar.HOUR_OF_DAY, timeMinutes / 60)
-                set(Calendar.MINUTE, timeMinutes % 60)
+                set(Calendar.HOUR_OF_DAY, normalized / 60)
+                set(Calendar.MINUTE, normalized % 60)
             }
             val dow = when (cal.get(Calendar.DAY_OF_WEEK)) {
                 Calendar.SUNDAY -> 7
