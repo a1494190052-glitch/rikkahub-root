@@ -26,10 +26,27 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "20"
+          cache: pnpm
+          cache-dependency-path: web-ui/pnpm-lock.yaml
 
       - name: Install web-ui dependencies
         working-directory: web-ui
         run: pnpm install --frozen-lockfile
+
+      # ── Android SDK 缓存 ──
+      # cmdline-tools 本身每次下载，但 platforms/build-tools/ndk 缓存起来
+      - name: Cache Android SDK
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.android/Sdk/platforms
+            ~/.android/Sdk/build-tools
+            ~/.android/Sdk/ndk
+            ~/.android/Sdk/platform-tools
+            ~/.android/Sdk/cmdline-tools
+          key: android-sdk-${{ runner.os }}-${{ hashFiles('.github/workflows/build-apk.yml') }}
+          restore-keys: |
+            android-sdk-${{ runner.os }}-
 
       - name: Install Android SDK components
         run: |
@@ -37,8 +54,11 @@ jobs:
           yes | "$SDKM" --sdk_root="$ANDROID_HOME" --licenses > /dev/null
           "$SDKM" --sdk_root="$ANDROID_HOME" "platform-tools" "platforms;android-37.0" "build-tools;36.0.0" "build-tools;36.1.0" "ndk;28.2.13676358"
 
+      # ── Gradle 缓存 (setup-gradle action 自带远程缓存 + 依赖图加速) ──
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
+        with:
+          cache-read-only: false
 
       - name: Decode signing keystore
         env:
