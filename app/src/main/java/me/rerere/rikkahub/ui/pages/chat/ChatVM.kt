@@ -19,6 +19,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import me.rerere.ai.core.MessageRole
 import me.rerere.ai.provider.Model
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
@@ -244,6 +245,36 @@ class ChatVM(
     ) {
         analytics.logEvent("ai_tool_answer", null)
         chatService.handleToolApproval(_conversationId, toolCallId, approved = true, answer = answer)
+    }
+
+    /**
+     * Continue 续写: 让 AI 接着最后一条助手消息继续生成
+     *
+     * 取最后一条助手消息的最后一段文本作为"续写锚点"拼入提示,
+     * 然后以一条新用户消息触发补全.
+     */
+    fun continueLastMessage() {
+        val conversation = conversation.value
+        val lastAssistantNode = conversation.messageNodes.lastOrNull { node ->
+            node.currentMessage.role == MessageRole.ASSISTANT
+        } ?: return
+        val lastText = lastAssistantNode.currentMessage.parts
+            .filterIsInstance<UIMessagePart.Text>()
+            .joinToString("\n") { it.text }
+            .trim()
+        if (lastText.isBlank()) return
+
+        // 取最后 100 字符作为锚点
+        val snippet = if (lastText.length > 100) {
+            "…${lastText.takeLast(100)}"
+        } else {
+            lastText
+        }
+        val continuePrompt = context.getString(
+            R.string.continue_message_template,
+            snippet
+        )
+        handleMessageSend(listOf(UIMessagePart.Text(text = continuePrompt)))
     }
 
     fun stopGeneration() {
