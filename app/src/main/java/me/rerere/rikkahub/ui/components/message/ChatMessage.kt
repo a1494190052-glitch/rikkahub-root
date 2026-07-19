@@ -71,7 +71,6 @@ import me.rerere.ai.ui.UIMessagePart
 import me.rerere.ai.ui.isEmptyUIMessage
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.File02
-import me.rerere.hugeicons.stroke.Forward01
 import me.rerere.hugeicons.stroke.MusicNote03
 import me.rerere.hugeicons.stroke.Video01
 import me.rerere.rikkahub.R
@@ -208,27 +207,9 @@ fun ChatMessage(
                         showActionsSheet = true
                     },
                     onTranslate = onTranslate,
-                    onClearTranslation = onClearTranslation
+                    onClearTranslation = onClearTranslation,
+                    onContinue = if (lastMessage && !loading && message.role == MessageRole.ASSISTANT) onContinue else null,
                 )
-
-                // Continue 续写按钮: 仅在最后一条助手消息且非生成中时显示
-                if (lastMessage && !loading && message.role == MessageRole.ASSISTANT && onContinue != null) {
-                    TextButton(
-                        onClick = onContinue,
-                        modifier = Modifier.padding(top = 4.dp)
-                    ) {
-                        Icon(
-                            imageVector = HugeIcons.Forward01,
-                            contentDescription = null,
-                            modifier = Modifier.size(16.dp)
-                        )
-                        Text(
-                            text = stringResource(R.string.continue_message),
-                            style = MaterialTheme.typography.labelMedium,
-                            modifier = Modifier.padding(start = 4.dp)
-                        )
-                    }
-                }
             }
         }
 
@@ -255,6 +236,7 @@ fun ChatMessage(
             },
             isFavorite = isFavorite,
             onToggleFavorite = onToggleFavorite,
+            onContinue = if (message.role == MessageRole.ASSISTANT) onContinue else null,
             onWebViewPreview = {
                 val textContent = message.parts
                     .filterIsInstance<UIMessagePart.Text>()

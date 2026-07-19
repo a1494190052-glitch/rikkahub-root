@@ -45,6 +45,7 @@ import me.rerere.hugeicons.stroke.Copy01
 import me.rerere.hugeicons.stroke.Delete01
 import me.rerere.hugeicons.stroke.Edit01
 import me.rerere.hugeicons.stroke.FavouriteCircle
+import me.rerere.hugeicons.stroke.Forward01
 import me.rerere.hugeicons.stroke.GitFork
 import me.rerere.hugeicons.stroke.MoreVertical
 import me.rerere.hugeicons.stroke.Refresh03
@@ -75,6 +76,7 @@ fun ColumnScope.ChatMessageActionButtons(
     onOpenActionSheet: () -> Unit,
     onTranslate: ((UIMessage, Locale) -> Unit)? = null,
     onClearTranslation: (UIMessage) -> Unit = {},
+    onContinue: (() -> Unit)? = null,
 ) {
     val context = LocalContext.current
     val settings = LocalSettings.current
@@ -176,6 +178,24 @@ fun ColumnScope.ChatMessageActionButtons(
                     tint = actionIconColor
                 )
             }
+
+            // Continue 续写图标
+            if (onContinue != null) {
+                Icon(
+                    imageVector = HugeIcons.Forward01,
+                    contentDescription = stringResource(R.string.continue_message),
+                    modifier = Modifier
+                        .clip(CircleShape)
+                        .clickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = LocalIndication.current,
+                            onClick = onContinue
+                        )
+                        .padding(8.dp)
+                        .size(16.dp),
+                    tint = actionIconColor
+                )
+            }
         }
 
         Icon(
@@ -254,6 +274,7 @@ fun ChatMessageActionsSheet(
     isFavorite: Boolean = false,
     onToggleFavorite: (() -> Unit)? = null,
     onWebViewPreview: () -> Unit,
+    onContinue: (() -> Unit)? = null,
     onDismissRequest: () -> Unit
 ) {
     ModalBottomSheet(
@@ -320,6 +341,35 @@ fun ChatMessageActionsSheet(
                         )
                         Text(
                             text = stringResource(R.string.render_with_webview),
+                            style = MaterialTheme.typography.titleMedium,
+                        )
+                    }
+                }
+            }
+
+            // Continue 续写
+            if (onContinue != null && message.role == MessageRole.ASSISTANT) {
+                Card(
+                    onClick = {
+                        onDismissRequest()
+                        onContinue()
+                    },
+                    shape = MaterialTheme.shapes.medium
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(16.dp),
+                        modifier = Modifier
+                            .padding(16.dp)
+                            .fillMaxWidth()
+                    ) {
+                        Icon(
+                            imageVector = HugeIcons.Forward01,
+                            contentDescription = null,
+                            modifier = Modifier.padding(4.dp)
+                        )
+                        Text(
+                            text = stringResource(R.string.continue_message),
                             style = MaterialTheme.typography.titleMedium,
                         )
                     }
