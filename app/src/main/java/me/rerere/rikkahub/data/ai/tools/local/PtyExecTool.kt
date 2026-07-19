@@ -40,6 +40,8 @@ private val HOST_ENV = arrayOf(
 internal fun buildPtyExecTool(
     context: Context,
     shellAuditLogger: ShellAuditLogger? = null,
+    // 用户全局审批覆盖: 返回 false = 一律自动放行; null = 默认(每次调用需审批)
+    approvalOverride: () -> Boolean? = { null },
 ): Tool {
     return Tool(
         name = "pty_exec",
@@ -83,8 +85,8 @@ internal fun buildPtyExecTool(
                 required = listOf("command"),
             )
         },
-        // 交互式会话整体视为写操作: 一律需要用户审批
-        needsApproval = { true },
+        // 交互式会话整体视为写操作: 默认一律需要用户审批 (可被全局覆盖放行)
+        needsApproval = { approvalOverride() ?: true },
         execute = {
             val params = it.jsonObject
             val command = params["command"]?.jsonPrimitive?.contentOrNull

@@ -540,6 +540,9 @@ data class Settings(
     val searchCommonOptions: SearchCommonOptions = SearchCommonOptions(),
     val searchServiceSelected: Int = 0,
     val mcpServers: List<McpServerConfig> = emptyList(),
+    // 全局工具审批覆盖 (toolName -> needsApproval)。未覆盖的工具沿用各自默认行为;
+    // 显式置 false = 该工具调用一律自动放行 (高危命令仍被 ShellSafety 拦截, 与审批无关)
+    val toolApprovalOverrides: Map<String, Boolean> = emptyMap(),
     val webDavConfig: WebDavConfig = WebDavConfig(),
     val s3Config: S3Config = S3Config(),
     val ttsProviders: List<TTSProviderSetting> = DEFAULT_TTS_PROVIDERS,

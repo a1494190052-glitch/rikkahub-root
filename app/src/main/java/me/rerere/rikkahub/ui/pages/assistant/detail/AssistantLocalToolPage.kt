@@ -46,6 +46,7 @@ fun AssistantLocalToolPage(id: String) {
         }
     )
     val assistant by vm.assistant.collectAsStateWithLifecycle()
+    val settings by vm.settings.collectAsStateWithLifecycle()
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
 
     Scaffold(
@@ -67,7 +68,9 @@ fun AssistantLocalToolPage(id: String) {
         AssistantLocalToolContent(
             innerPadding = innerPadding,
             assistant = assistant,
-            onUpdate = { vm.update(it) }
+            toolApprovalOverrides = settings.toolApprovalOverrides,
+            onUpdate = { vm.update(it) },
+            onToggleApproval = { toolName, require -> vm.updateToolApproval(toolName, require) }
         )
     }
 }
@@ -76,7 +79,9 @@ fun AssistantLocalToolPage(id: String) {
 private fun AssistantLocalToolContent(
     innerPadding: PaddingValues,
     assistant: Assistant,
-    onUpdate: (Assistant) -> Unit
+    toolApprovalOverrides: Map<String, Boolean>,
+    onUpdate: (Assistant) -> Unit,
+    onToggleApproval: (String, Boolean) -> Unit,
 ) {
     val context = LocalContext.current
     val toaster = LocalToaster.current
@@ -265,6 +270,42 @@ private fun AssistantLocalToolContent(
                     Switch(
                         checked = assistant.localTools.contains(LocalToolOption.Scheduler),
                         onCheckedChange = { toggleLocalTool(LocalToolOption.Scheduler, it) }
+                    )
+                }
+            )
+        }
+
+        // 工具审批: 关闭后对应工具调用直接执行不再询问 (全局生效, 高危命令仍被安全闸门拦截)
+        CardGroup(
+            title = { Text(stringResource(R.string.assistant_page_local_tools_approval_section_title)) }
+        ) {
+            item(
+                headlineContent = { Text(stringResource(R.string.assistant_page_local_tools_approval_root_shell_title)) },
+                supportingContent = { Text(stringResource(R.string.assistant_page_local_tools_approval_root_shell_desc)) },
+                trailingContent = {
+                    Switch(
+                        checked = toolApprovalOverrides["root_shell"] != false,
+                        onCheckedChange = { onToggleApproval("root_shell", it) }
+                    )
+                }
+            )
+            item(
+                headlineContent = { Text(stringResource(R.string.assistant_page_local_tools_approval_pty_exec_title)) },
+                supportingContent = { Text(stringResource(R.string.assistant_page_local_tools_approval_pty_exec_desc)) },
+                trailingContent = {
+                    Switch(
+                        checked = toolApprovalOverrides["pty_exec"] != false,
+                        onCheckedChange = { onToggleApproval("pty_exec", it) }
+                    )
+                }
+            )
+            item(
+                headlineContent = { Text(stringResource(R.string.assistant_page_local_tools_approval_pty_session_title)) },
+                supportingContent = { Text(stringResource(R.string.assistant_page_local_tools_approval_pty_session_desc)) },
+                trailingContent = {
+                    Switch(
+                        checked = toolApprovalOverrides["pty_session"] != false,
+                        onCheckedChange = { onToggleApproval("pty_session", it) }
                     )
                 }
             )

@@ -34,6 +34,8 @@ internal fun buildPtySessionTool(
     context: Context,
     ptySessionManager: PtySessionManager,
     shellAuditLogger: ShellAuditLogger? = null,
+    // 用户全局审批覆盖: 返回 false = 一律自动放行; null = 默认(open/send/close 需审批)
+    approvalOverride: () -> Boolean? = { null },
 ): Tool {
     return Tool(
         name = "pty_session",
@@ -85,8 +87,10 @@ Send with optional expect (regex) to wait for pattern. Each session auto-expires
             )
         },
         needsApproval = { params ->
-            val action = params.jsonObject["action"]?.jsonPrimitive?.contentOrNull?.trim().orEmpty()
-            action in setOf("open", "send", "close")
+            approvalOverride() ?: run {
+                val action = params.jsonObject["action"]?.jsonPrimitive?.contentOrNull?.trim().orEmpty()
+                action in setOf("open", "send", "close")
+            }
         },
         execute = {
             val params = it.jsonObject

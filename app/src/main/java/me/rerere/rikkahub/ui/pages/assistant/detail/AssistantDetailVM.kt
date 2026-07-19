@@ -160,6 +160,24 @@ class AssistantDetailVM(
         }
     }
 
+    /**
+     * 切换某工具的全局审批要求。requireApproval=true 时移除覆盖(回到工具默认行为),
+     * false 时写入覆盖(该工具调用一律自动放行)。
+     */
+    fun updateToolApproval(toolName: String, requireApproval: Boolean) {
+        viewModelScope.launch {
+            settingsStore.update { settings ->
+                val overrides = settings.toolApprovalOverrides.toMutableMap()
+                if (requireApproval) {
+                    overrides.remove(toolName)
+                } else {
+                    overrides[toolName] = false
+                }
+                settings.copy(toolApprovalOverrides = overrides)
+            }
+        }
+    }
+
     fun update(assistant: Assistant) {
         viewModelScope.launch {
             val settings = settings.value

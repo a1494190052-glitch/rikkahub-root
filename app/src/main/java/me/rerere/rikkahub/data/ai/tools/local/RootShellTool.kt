@@ -23,6 +23,8 @@ internal fun buildRootShellTool(
     shellSessionManager: ShellSessionManager? = null,
     shellAuditLogger: ShellAuditLogger? = null,
     isSubAgent: Boolean = false,
+    // 用户全局审批覆盖: 返回 false = 一律自动放行; null = 默认(写操作需审批)
+    approvalOverride: () -> Boolean? = { null },
 ): Tool {
     val runner = RootShellRunner()
     return Tool(
@@ -73,8 +75,10 @@ internal fun buildRootShellTool(
             { false } // 子代理无人审批, 全部自动放行 (子代理环境已受限)
         } else {
             { json ->
-                val command = json.jsonObject["command"]?.jsonPrimitive?.contentOrNull.orEmpty()
-                ShellSafety.classify(command) == ShellRisk.WRITE
+                approvalOverride() ?: run {
+                    val command = json.jsonObject["command"]?.jsonPrimitive?.contentOrNull.orEmpty()
+                    ShellSafety.classify(command) == ShellRisk.WRITE
+                }
             }
         },
         execute = {

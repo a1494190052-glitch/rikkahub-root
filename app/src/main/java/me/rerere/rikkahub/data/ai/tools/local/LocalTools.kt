@@ -32,12 +32,20 @@ class LocalTools(
 
     val calendarCreateTool by lazy { buildCalendarCreateTool(context) }
 
-    val rootShellTool by lazy { buildRootShellTool(shellSessionManager, shellAuditLogger, isSubAgent) }
+    /** 读取用户对某工具的全局审批覆盖 (null = 未覆盖, 沿用工具默认) */
+    private fun toolApprovalOverride(name: String): Boolean? =
+        settingsStore.settingsFlow.value.toolApprovalOverrides[name]
 
-    val ptyExecTool by lazy { buildPtyExecTool(context, shellAuditLogger) }
+    val rootShellTool by lazy {
+        buildRootShellTool(shellSessionManager, shellAuditLogger, isSubAgent) { toolApprovalOverride("root_shell") }
+    }
+
+    val ptyExecTool by lazy {
+        buildPtyExecTool(context, shellAuditLogger) { toolApprovalOverride("pty_exec") }
+    }
 
     val ptySessionTool by lazy {
-        ptySessionManager?.let { buildPtySessionTool(context, it, shellAuditLogger) }
+        ptySessionManager?.let { buildPtySessionTool(context, it, shellAuditLogger) { toolApprovalOverride("pty_session") } }
     }
 
     /**

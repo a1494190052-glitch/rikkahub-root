@@ -1292,6 +1292,13 @@
   <string name="workspace_page_root_mode_desc">Run workspace shell commands on the host system with root privileges (via su), bypassing the proot container. Affects both the AI workspace_shell tool and the workspace terminal. Dangerous, enable with caution.</string>
   <string name="assistant_page_local_tools_root_shell_title">Root Shell</string>
   <string name="assistant_page_local_tools_root_shell_desc">Let the AI run shell commands on the host system with root privileges (via su). Requires a rooted device. Dangerous, enable with caution.</string>
+  <string name="assistant_page_local_tools_approval_section_title">Tool Approval</string>
+  <string name="assistant_page_local_tools_approval_root_shell_title">root_shell confirmation</string>
+  <string name="assistant_page_local_tools_approval_root_shell_desc">Ask before running root commands. Turn off to run all calls without asking (dangerous commands are still blocked by the safety guard)</string>
+  <string name="assistant_page_local_tools_approval_pty_exec_title">pty_exec confirmation</string>
+  <string name="assistant_page_local_tools_approval_pty_exec_desc">Ask before each interactive PTY run. Turn off to run without asking</string>
+  <string name="assistant_page_local_tools_approval_pty_session_title">pty_session confirmation</string>
+  <string name="assistant_page_local_tools_approval_pty_session_desc">Ask before open/send/close in persistent PTY sessions. Turn off to run without asking</string>
   <string name="assistant_page_local_tools_sub_agents_title">Agent Swarm</string>
   <string name="assistant_page_local_tools_sub_agents_desc">Let the AI hire sub-agents (hire_agent / hire_team) to work on independent subtasks in parallel and merge their reports. Sub-agents use the fast model by default and inherit enabled tools.</string>
   <string name="chat_message_tool_calendar_query">Query calendar events</string>
