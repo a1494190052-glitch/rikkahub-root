@@ -97,6 +97,12 @@ android {
         debug {
             applicationIdSuffix = ".debug"
             versionNameSuffix = "-root"
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro"
+            )
             if (rootProject.file("signing/keystore.jks").exists()) {
                 signingConfig = signingConfigs.getByName("ci")
             }

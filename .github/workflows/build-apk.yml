@@ -80,16 +80,17 @@ jobs:
             echo "$SIGNING_CONFIG" > local.properties
           fi
 
-      - name: Build & minify release APK
+      - name: Build & minify debug APK with R8
         env:
           CI_KEYSTORE_PASSWORD: ${{ secrets.CI_KEYSTORE_PASSWORD }}
         run: |
           chmod +x gradlew
-          ./gradlew assembleRelease
+          # 用 debug 变体编译但通过参数启用 R8 压缩
+          ./gradlew assembleDebug -Pandroid.enableR8=true -Pandroid.enableR8.libraryDesugaring=true
 
       - name: Rename APK with version
         run: |
-          cd app/build/outputs/apk/release
+          cd app/build/outputs/apk/debug
           for f in *.apk; do
             mv "$f" "rikkahub-root-2.4.2-r${GITHUB_RUN_NUMBER}-arm64.apk"
           done
@@ -98,5 +99,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: rikkahub-root-2.4.2-r${{ github.run_number }}-arm64
-          path: app/build/outputs/apk/release/*.apk
+          path: app/build/outputs/apk/debug/*.apk
           retention-days: 14
