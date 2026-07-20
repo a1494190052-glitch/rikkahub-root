@@ -85,8 +85,8 @@ jobs:
           CI_KEYSTORE_PASSWORD: ${{ secrets.CI_KEYSTORE_PASSWORD }}
         run: |
           chmod +x gradlew
-          # 用 debug 变体编译但通过参数启用 R8 压缩
-          ./gradlew assembleDebug -Pandroid.enableR8=true -Pandroid.enableR8.libraryDesugaring=true
+          # Debug 变体已启用 isMinifyEnabled=true + proguard 规则
+          ./gradlew assembleDebug
 
       - name: Rename APK with version
         run: |
