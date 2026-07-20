@@ -181,46 +181,32 @@ fun HtmlMessageContent(
                             (function() {
                                 var scheduled = false;
                                 var lastHeight = 0;
+                                var resizeTimer = null;
                                 function measure() {
+                                    // 只用 document.scrollHeight, 不遍历 DOM 节点
+                                    // querySelectorAll + getBoundingClientRect 循环是性能杀手
                                     var h = Math.max(
                                         document.body ? document.body.scrollHeight : 0,
                                         document.documentElement ? document.documentElement.scrollHeight : 0
                                     );
-                                    // fixed/absolute 元素不占文档流: 取所有元素下边界最大值兜底
-                                    var els = document.body ? document.body.querySelectorAll('*') : [];
-                                    var limit = Math.min(els.length, 500);
-                                    for (var i = 0; i < limit; i++) {
-                                        var r = els[i].getBoundingClientRect();
-                                        if (r.height > 0) {
-                                            var bottom = r.bottom + window.scrollY;
-                                            if (bottom > h) h = Math.ceil(bottom);
-                                        }
-                                    }
-                                    // 微小变化忽略, 避免动画抖动引发频繁重组
                                     if (Math.abs(h - lastHeight) >= 8) {
                                         lastHeight = h;
                                         AndroidHeight.post(h);
                                     }
                                 }
-                                function scheduleMeasure() {
-                                    if (scheduled) return;
-                                    scheduled = true;
-                                    setTimeout(function() { scheduled = false; measure(); }, 120);
+                                function debounceMeasure() {
+                                    if (resizeTimer) clearTimeout(resizeTimer);
+                                    resizeTimer = setTimeout(measure, 200);
                                 }
-                                if (window.__heightObserverInstalled) { scheduleMeasure(); return; }
+                                if (window.__heightObserverInstalled) { return; }
                                 window.__heightObserverInstalled = true;
-                                // ResizeObserver (Tavo 方案): 只在 body 尺寸真正变化时触发,
-                                // CSS transform 动画不触发 -> 不会随动画帧风暴
                                 if (typeof ResizeObserver !== 'undefined') {
-                                    new ResizeObserver(scheduleMeasure).observe(document.documentElement);
-                                    if (document.body) new ResizeObserver(scheduleMeasure).observe(document.body);
+                                    new ResizeObserver(debounceMeasure).observe(document.documentElement);
                                 }
-                                window.addEventListener('load', scheduleMeasure);
-                                window.addEventListener('resize', scheduleMeasure);
-                                scheduleMeasure();
-                                setTimeout(measure, 500);
-                                setTimeout(measure, 1500);
-                                setTimeout(measure, 3500);
+                                // passive:true 让浏览器不必等 JS 再滚动
+                                window.addEventListener('load', measure, {passive: true});
+                                window.addEventListener('resize', measure, {passive: true});
+                                measure();
                             })();
                             """.trimIndent(), null
                         )
@@ -567,7 +553,9 @@ private fun buildHtmlMessageDocument(
         append("<meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">")
         append("<style>")
         val scrollCss = if (fullscreen) {
-            "overflow: auto; -webkit-overflow-scrolling: touch;"
+            // will-change 让浏览器提前 GPU 提层, 滑动不再 CPU 软渲染
+            // -webkit-overflow-scrolling 已废弃, 新 WebView 靠 will-change 触发 GPU 合成
+            "overflow: auto; will-change: transform;"
         } else {
             "overflow: hidden;"
         }
