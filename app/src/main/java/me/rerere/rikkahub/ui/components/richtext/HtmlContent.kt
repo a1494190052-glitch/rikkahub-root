@@ -553,9 +553,18 @@ private fun buildHtmlMessageDocument(
         append("<meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">")
         append("<style>")
         val scrollCss = if (fullscreen) {
-            // will-change 让浏览器提前 GPU 提层, 滑动不再 CPU 软渲染
-            // -webkit-overflow-scrolling 已废弃, 新 WebView 靠 will-change 触发 GPU 合成
-            "overflow: auto; will-change: transform;"
+            // 三件套修复局部滚动泥潭感:
+            // 1. overflow:auto — 允许内部滚动
+            // 2. -webkit-overflow-scrolling:touch — 物理惯性(非 CPU 软渲染)
+            // 3. overscroll-behavior:contain — 切断滚动链, 到底不会拽动外层
+            // ⚠️ 不能用 transform:translateZ(0) 提层 — 会破坏角色卡的 fixed 定位
+            //    改用 will-change:scroll-position 触发合成器线程
+            """
+            overflow: auto;
+            -webkit-overflow-scrolling: touch;
+            will-change: scroll-position;
+            overscroll-behavior-y: contain;
+            """
         } else {
             "overflow: hidden;"
         }
