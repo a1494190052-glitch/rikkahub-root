@@ -72,16 +72,16 @@ jobs:
           mkdir -p signing
           echo "$ROOT_KEYSTORE_BASE64" | base64 -d > signing/keystore.jks
 
-      - name: Build debug APK
+      - name: Build & minify release APK
         env:
           CI_KEYSTORE_PASSWORD: ${{ secrets.CI_KEYSTORE_PASSWORD }}
         run: |
           chmod +x gradlew
-          ./gradlew assembleDebug
+          ./gradlew assembleRelease
 
       - name: Rename APK with version
         run: |
-          cd app/build/outputs/apk/debug
+          cd app/build/outputs/apk/release
           for f in *.apk; do
             mv "$f" "rikkahub-root-2.4.2-r${GITHUB_RUN_NUMBER}-arm64.apk"
           done
@@ -90,5 +90,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: rikkahub-root-2.4.2-r${{ github.run_number }}-arm64
-          path: app/build/outputs/apk/debug/*.apk
+          path: app/build/outputs/apk/release/*.apk
           retention-days: 14
