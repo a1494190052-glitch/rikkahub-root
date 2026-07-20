@@ -1,11 +1,6 @@
 {
   "name": "RikkaHub Root Build",
   "image": "mcr.microsoft.com/devcontainers/universal:2",
-  "hostRequirements": {
-    "cpus": 8,
-    "memory": "16gb",
-    "storage": "64gb"
-  },
   "features": {
     "ghcr.io/devcontainers/features/android-sdk:1": {
       "platforms": "platforms;android-37",
@@ -29,10 +24,10 @@
       ]
     }
   },
-  "postCreateCommand": "sudo apt-get update && sudo apt-get install -y pngquant webp cpio && cd web-ui && pnpm install",
+  "postCreateCommand": "cd web-ui && pnpm install",
   "forwardPorts": [8080],
   "containerEnv": {
     "GRADLE_OPTS": "-Dorg.gradle.parallel=true -Dorg.gradle.workers.max=8 -Dorg.gradle.caching=true",
-    "ANDROID_SDK_ROOT": "/usr/lib/android-sdk"
+    "ANDROID_SDK_ROOT": "/usr/local/android/sdk"
   }
 }
