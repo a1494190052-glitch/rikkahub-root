@@ -255,6 +255,15 @@ fun HtmlMessageContent(
             // Android WebView 的 nestedScrollingEnabled 与 LazyColumn 配合
             // 极不稳定(手势颠簸/不跟手), 宁可全部切断, 各自管好自己的滚动域
             webView.isNestedScrollingEnabled = false
+            // 全屏角色卡: 禁止父容器(LazyColumn)抢夺触摸事件
+            if (isFullScreenLayout) {
+                webView.setOnTouchListener { v, event ->
+                    if (event.action == android.view.MotionEvent.ACTION_DOWN) {
+                        v.parent?.requestDisallowInterceptTouchEvent(true)
+                    }
+                    false // 不消费事件, 让 WebView 内部继续处理
+                }
+            }
             // 全屏界面: 在 HTML body 注入 overflow:auto, 让 WebView 内部用原生滚动
             // 非全屏: 注入 overflow:hidden, 内容完全由高度撑开, 滚动归 LazyColumn
             // 内容未变化时不重复加载, 避免闪烁
