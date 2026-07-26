@@ -17,7 +17,7 @@ import me.rerere.ai.ui.UIMessagePart
 fun createVibrateTool(context: Context): Tool = Tool(
     name = "vibrate",
     description = "Vibrate the device. Provide duration_ms (single) or pattern (waveform of off/on ms).",
-    needsApproval = true,
+    needsApproval = { true },
     parameters = { InputSchema.Obj(properties = buildJsonObject { putJsonObject("duration_ms") { put("type", "integer"); put("description", "Duration in ms (1-5000)") }; putJsonObject("pattern") { put("type", "array"); put("description", "Waveform [off,on,...] in ms"); putJsonObject("items") { put("type", "integer") } } }) },
     execute = { args ->
         val params = args.jsonObject; val dur = params["duration_ms"]?.jsonPrimitive?.intOrNull; val pat = params["pattern"] as? JsonArray

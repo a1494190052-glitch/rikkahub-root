@@ -29,7 +29,7 @@ fun createGetBrightnessTool(context: Context): Tool = Tool(
 fun createSetBrightnessTool(context: Context): Tool = Tool(
     name = "set_brightness",
     description = "Set the screen brightness (1-255). Requires WRITE_SETTINGS permission.",
-    needsApproval = true,
+    needsApproval = { true },
     parameters = { InputSchema.Obj(properties = buildJsonObject { putJsonObject("value") { put("type", "integer"); put("description", "Brightness value (1-255)") } }, required = listOf("value")) },
     execute = { args ->
         val value = args.jsonObject["value"]?.jsonPrimitive?.intOrNull ?: return@Tool listOf(UIMessagePart.Text(buildJsonObject { put("success", false); put("error", "Missing 'value'") }.toString()))

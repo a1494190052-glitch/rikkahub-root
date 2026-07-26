@@ -14,7 +14,7 @@ import me.rerere.ai.ui.UIMessagePart
 
 @Suppress("DEPRECATION")
 fun createWakeScreenTool(context: Context): Tool = Tool(
-    name = "wake_screen", description = "Wake up the screen if it is off. Holds a wake lock for a specified duration.", needsApproval = true,
+    name = "wake_screen", description = "Wake up the screen if it is off. Holds a wake lock for a specified duration.", needsApproval = { true },
     parameters = { InputSchema.Obj(properties = buildJsonObject { putJsonObject("hold_ms") { put("type", "integer"); put("description", "Hold duration ms (500-30000). Default: 3000") } }) },
     execute = { args ->
         val holdMs = (args.jsonObject["hold_ms"]?.jsonPrimitive?.intOrNull ?: 3000).coerceIn(500, 30000)

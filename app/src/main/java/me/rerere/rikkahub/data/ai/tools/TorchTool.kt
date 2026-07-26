@@ -14,7 +14,7 @@ import me.rerere.ai.ui.UIMessagePart
 fun createTorchTool(context: Context): Tool = Tool(
     name = "set_torch",
     description = "Turn the device flashlight/torch on or off.",
-    needsApproval = true,
+    needsApproval = { true },
     parameters = { InputSchema.Obj(properties = buildJsonObject { putJsonObject("on") { put("type", "boolean"); put("description", "True to turn on, false to turn off") } }, required = listOf("on")) },
     execute = { args ->
         val on = args.jsonObject["on"]?.jsonPrimitive?.content?.toBooleanStrictOrNull() ?: return@Tool listOf(UIMessagePart.Text(buildJsonObject { put("success", false); put("error", "Missing 'on'") }.toString()))

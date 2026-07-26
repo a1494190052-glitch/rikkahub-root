@@ -27,7 +27,7 @@ fun createGetVolumeTool(context: Context): Tool = Tool(
 )
 
 fun createSetVolumeTool(context: Context): Tool = Tool(
-    name = "set_volume", description = "Set volume for an audio stream by percentage (0-100).", needsApproval = true,
+    name = "set_volume", description = "Set volume for an audio stream by percentage (0-100).", needsApproval = { true },
     parameters = { InputSchema.Obj(properties = buildJsonObject { putJsonObject("stream") { put("type", "string"); put("description", "Stream name") }; putJsonObject("percent") { put("type", "integer"); put("description", "Volume percentage (0-100)") } }, required = listOf("stream", "percent")) },
     execute = { args ->
         val streamName = args.jsonObject["stream"]?.jsonPrimitive?.contentOrNull; val percent = args.jsonObject["percent"]?.jsonPrimitive?.intOrNull
