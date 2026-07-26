@@ -12,7 +12,7 @@ import me.rerere.ai.core.Tool
 import me.rerere.ai.ui.UIMessagePart
 
 fun createTelephonyInfoTool(context: Context): Tool = Tool(
-    name = "get_telephony_info", description = "Get SIM card info and carrier information. Requires READ_PHONE_STATE permission.", needsApproval = true,
+    name = "get_telephony_info", description = "Get SIM card info and carrier information. Requires READ_PHONE_STATE permission.", needsApproval = { true },
     parameters = { InputSchema.Obj(properties = buildJsonObject {}) },
     execute = { _ ->
         if (ContextCompat.checkSelfPermission(context, Manifest.permission.READ_PHONE_STATE) != PackageManager.PERMISSION_GRANTED)

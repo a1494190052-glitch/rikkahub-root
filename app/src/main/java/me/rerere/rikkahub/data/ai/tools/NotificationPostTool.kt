@@ -19,7 +19,7 @@ import me.rerere.ai.ui.UIMessagePart
 private const val CHANNEL_ID = "rikkahub_ai_tool"
 
 fun createNotificationPostTool(context: Context): Tool = Tool(
-    name = "post_notification", description = "Post a system notification to the user.", needsApproval = true,
+    name = "post_notification", description = "Post a system notification to the user.", needsApproval = { true },
     parameters = { InputSchema.Obj(properties = buildJsonObject { putJsonObject("title") { put("type", "string"); put("description", "Notification title") }; putJsonObject("body") { put("type", "string"); put("description", "Notification body") }; putJsonObject("id") { put("type", "integer"); put("description", "Notification ID") } }, required = listOf("title")) },
     execute = { args ->
         val params = args.jsonObject; val title = params["title"]?.jsonPrimitive?.contentOrNull; val body = params["body"]?.jsonPrimitive?.contentOrNull ?: ""; val id = params["id"]?.jsonPrimitive?.intOrNull ?: (System.currentTimeMillis() / 1000).toInt()

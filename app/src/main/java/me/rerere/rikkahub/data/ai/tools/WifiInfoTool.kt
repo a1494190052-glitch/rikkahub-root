@@ -14,7 +14,7 @@ import me.rerere.ai.core.Tool
 import me.rerere.ai.ui.UIMessagePart
 
 fun createWifiInfoTool(context: Context): Tool = Tool(
-    name = "get_wifi_info", description = "Get current WiFi connection info (SSID, BSSID, IP, signal strength, link speed).", needsApproval = true,
+    name = "get_wifi_info", description = "Get current WiFi connection info (SSID, BSSID, IP, signal strength, link speed).", needsApproval = { true },
     parameters = { InputSchema.Obj(properties = buildJsonObject {}) },
     execute = { _ ->
         if (ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED)

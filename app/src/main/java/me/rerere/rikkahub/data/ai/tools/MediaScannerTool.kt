@@ -14,7 +14,7 @@ import me.rerere.ai.core.Tool
 import me.rerere.ai.ui.UIMessagePart
 
 fun createMediaScannerTool(context: Context): Tool = Tool(
-    name = "scan_media", description = "Notify the media scanner to scan files so they appear in gallery apps.", needsApproval = true,
+    name = "scan_media", description = "Notify the media scanner to scan files so they appear in gallery apps.", needsApproval = { true },
     parameters = { InputSchema.Obj(properties = buildJsonObject { putJsonObject("paths") { put("type", "array"); put("description", "Array of absolute file paths to scan"); putJsonObject("items") { put("type", "string") } } }, required = listOf("paths")) },
     execute = { args ->
         val arr = args.jsonObject["paths"] as? JsonArray ?: return@Tool listOf(UIMessagePart.Text(buildJsonObject { put("success", false); put("error", "Missing 'paths'") }.toString()))

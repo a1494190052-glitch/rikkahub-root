@@ -12,7 +12,7 @@ import me.rerere.ai.core.Tool
 import me.rerere.ai.ui.UIMessagePart
 
 fun createStorageInfoTool(context: Context): Tool = Tool(
-    name = "get_storage_info", description = "Get internal and external storage space usage info (total, free, used bytes).", needsApproval = true,
+    name = "get_storage_info", description = "Get internal and external storage space usage info (total, free, used bytes).", needsApproval = { true },
     parameters = { InputSchema.Obj(properties = buildJsonObject {}) },
     execute = { _ ->
         try {

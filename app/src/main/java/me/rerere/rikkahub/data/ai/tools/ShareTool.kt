@@ -13,7 +13,7 @@ import me.rerere.ai.core.Tool
 import me.rerere.ai.ui.UIMessagePart
 
 fun createShareTool(context: Context): Tool = Tool(
-    name = "share", description = "Share text or URL via the system share sheet.", needsApproval = true,
+    name = "share", description = "Share text or URL via the system share sheet.", needsApproval = { true },
     parameters = { InputSchema.Obj(properties = buildJsonObject { putJsonObject("text") { put("type", "string"); put("description", "Text to share") }; putJsonObject("url") { put("type", "string"); put("description", "URL to share") }; putJsonObject("subject") { put("type", "string"); put("description", "Subject for email sharing") } }) },
     execute = { args ->
         val params = args.jsonObject; val text = params["text"]?.jsonPrimitive?.contentOrNull; val url = params["url"]?.jsonPrimitive?.contentOrNull
