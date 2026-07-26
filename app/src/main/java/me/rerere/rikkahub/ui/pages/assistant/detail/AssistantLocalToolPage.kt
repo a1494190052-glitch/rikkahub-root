@@ -105,58 +105,59 @@ private fun AssistantLocalToolContent(
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         CardGroup {
-            ToolSwitch(R.string.assistant_page_local_tools_javascript_engine_title, R.string.assistant_page_local_tools_javascript_engine_desc, LocalToolOption.JavascriptEngine, assistant, ::toggleLocalTool)
-            ToolSwitch(R.string.assistant_page_local_tools_time_info_title, R.string.assistant_page_local_tools_time_info_desc, LocalToolOption.TimeInfo, assistant, ::toggleLocalTool)
-            ToolSwitch(R.string.assistant_page_local_tools_clipboard_title, R.string.assistant_page_local_tools_clipboard_desc, LocalToolOption.Clipboard, assistant, ::toggleLocalTool)
-            ToolSwitch(R.string.assistant_page_local_tools_tts_title, R.string.assistant_page_local_tools_tts_desc, LocalToolOption.Tts, assistant, ::toggleLocalTool)
-            ToolSwitch(R.string.assistant_page_local_tools_ask_user_title, R.string.assistant_page_local_tools_ask_user_desc, LocalToolOption.AskUser, assistant, ::toggleLocalTool)
-            ToolSwitch(R.string.assistant_page_local_tools_screen_time_title, R.string.assistant_page_local_tools_screen_time_desc, LocalToolOption.ScreenTime, assistant, ::toggleLocalTool)
-            ToolSwitch(R.string.assistant_page_local_tools_calendar_title, R.string.assistant_page_local_tools_calendar_desc, LocalToolOption.Calendar, assistant, ::toggleLocalTool)
-            ToolSwitch(R.string.assistant_page_local_tools_root_shell_title, R.string.assistant_page_local_tools_root_shell_desc, LocalToolOption.RootShell, assistant, ::toggleLocalTool)
-            ToolSwitch(R.string.assistant_page_local_tools_sub_agents_title, R.string.assistant_page_local_tools_sub_agents_desc, LocalToolOption.SubAgents, assistant, ::toggleLocalTool)
-            ToolSwitch(R.string.assistant_page_local_tools_scheduler_title, R.string.assistant_page_local_tools_scheduler_desc, LocalToolOption.Scheduler, assistant, ::toggleLocalTool)
+            ToolItem(R.string.assistant_page_local_tools_javascript_engine_title, R.string.assistant_page_local_tools_javascript_engine_desc, LocalToolOption.JavascriptEngine, assistant, ::toggleLocalTool)
+            ToolItem(R.string.assistant_page_local_tools_time_info_title, R.string.assistant_page_local_tools_time_info_desc, LocalToolOption.TimeInfo, assistant, ::toggleLocalTool)
+            ToolItem(R.string.assistant_page_local_tools_clipboard_title, R.string.assistant_page_local_tools_clipboard_desc, LocalToolOption.Clipboard, assistant, ::toggleLocalTool)
+            ToolItem(R.string.assistant_page_local_tools_tts_title, R.string.assistant_page_local_tools_tts_desc, LocalToolOption.Tts, assistant, ::toggleLocalTool)
+            ToolItem(R.string.assistant_page_local_tools_ask_user_title, R.string.assistant_page_local_tools_ask_user_desc, LocalToolOption.AskUser, assistant, ::toggleLocalTool)
+            ToolItem(R.string.assistant_page_local_tools_screen_time_title, R.string.assistant_page_local_tools_screen_time_desc, LocalToolOption.ScreenTime, assistant, ::toggleLocalTool)
+            ToolItem(R.string.assistant_page_local_tools_calendar_title, R.string.assistant_page_local_tools_calendar_desc, LocalToolOption.Calendar, assistant, ::toggleLocalTool)
+            ToolItem(R.string.assistant_page_local_tools_root_shell_title, R.string.assistant_page_local_tools_root_shell_desc, LocalToolOption.RootShell, assistant, ::toggleLocalTool)
+            ToolItem(R.string.assistant_page_local_tools_sub_agents_title, R.string.assistant_page_local_tools_sub_agents_desc, LocalToolOption.SubAgents, assistant, ::toggleLocalTool)
+            ToolItem(R.string.assistant_page_local_tools_scheduler_title, R.string.assistant_page_local_tools_scheduler_desc, LocalToolOption.Scheduler, assistant, ::toggleLocalTool)
             // 橘瓣移植系统工具
-            ToolSwitch(R.string.assistant_page_local_tools_battery_title, R.string.assistant_page_local_tools_battery_desc, LocalToolOption.Battery, assistant, ::toggleLocalTool)
-            ToolSwitch(R.string.assistant_page_local_tools_brightness_title, R.string.assistant_page_local_tools_brightness_desc, LocalToolOption.Brightness, assistant, ::toggleLocalTool)
-            ToolSwitch(R.string.assistant_page_local_tools_torch_title, R.string.assistant_page_local_tools_torch_desc, LocalToolOption.Torch, assistant, ::toggleLocalTool)
-            ToolSwitch(R.string.assistant_page_local_tools_vibrate_title, R.string.assistant_page_local_tools_vibrate_desc, LocalToolOption.Vibrate, assistant, ::toggleLocalTool)
-            ToolSwitch(R.string.assistant_page_local_tools_volume_title, R.string.assistant_page_local_tools_volume_desc, LocalToolOption.Volume, assistant, ::toggleLocalTool)
-            ToolSwitch(R.string.assistant_page_local_tools_wake_screen_title, R.string.assistant_page_local_tools_wake_screen_desc, LocalToolOption.WakeScreen, assistant, ::toggleLocalTool)
-            ToolSwitch(R.string.assistant_page_local_tools_wifi_info_title, R.string.assistant_page_local_tools_wifi_info_desc, LocalToolOption.WifiInfo, assistant, ::toggleLocalTool)
-            ToolSwitch(R.string.assistant_page_local_tools_telephony_info_title, R.string.assistant_page_local_tools_telephony_info_desc, LocalToolOption.TelephonyInfo, assistant, ::toggleLocalTool)
-            ToolSwitch(R.string.assistant_page_local_tools_storage_info_title, R.string.assistant_page_local_tools_storage_info_desc, LocalToolOption.StorageInfo, assistant, ::toggleLocalTool)
-            ToolSwitch(R.string.assistant_page_local_tools_toast_title, R.string.assistant_page_local_tools_toast_desc, LocalToolOption.Toast, assistant, ::toggleLocalTool)
-            ToolSwitch(R.string.assistant_page_local_tools_post_notification_title, R.string.assistant_page_local_tools_post_notification_desc, LocalToolOption.PostNotification, assistant, ::toggleLocalTool)
-            ToolSwitch(R.string.assistant_page_local_tools_share_title, R.string.assistant_page_local_tools_share_desc, LocalToolOption.Share, assistant, ::toggleLocalTool)
-            ToolSwitch(R.string.assistant_page_local_tools_scan_media_title, R.string.assistant_page_local_tools_scan_media_desc, LocalToolOption.ScanMedia, assistant, ::toggleLocalTool)
+            ToolItem(R.string.assistant_page_local_tools_battery_title, R.string.assistant_page_local_tools_battery_desc, LocalToolOption.Battery, assistant, ::toggleLocalTool)
+            ToolItem(R.string.assistant_page_local_tools_brightness_title, R.string.assistant_page_local_tools_brightness_desc, LocalToolOption.Brightness, assistant, ::toggleLocalTool)
+            ToolItem(R.string.assistant_page_local_tools_torch_title, R.string.assistant_page_local_tools_torch_desc, LocalToolOption.Torch, assistant, ::toggleLocalTool)
+            ToolItem(R.string.assistant_page_local_tools_vibrate_title, R.string.assistant_page_local_tools_vibrate_desc, LocalToolOption.Vibrate, assistant, ::toggleLocalTool)
+            ToolItem(R.string.assistant_page_local_tools_volume_title, R.string.assistant_page_local_tools_volume_desc, LocalToolOption.Volume, assistant, ::toggleLocalTool)
+            ToolItem(R.string.assistant_page_local_tools_wake_screen_title, R.string.assistant_page_local_tools_wake_screen_desc, LocalToolOption.WakeScreen, assistant, ::toggleLocalTool)
+            ToolItem(R.string.assistant_page_local_tools_wifi_info_title, R.string.assistant_page_local_tools_wifi_info_desc, LocalToolOption.WifiInfo, assistant, ::toggleLocalTool)
+            ToolItem(R.string.assistant_page_local_tools_telephony_info_title, R.string.assistant_page_local_tools_telephony_info_desc, LocalToolOption.TelephonyInfo, assistant, ::toggleLocalTool)
+            ToolItem(R.string.assistant_page_local_tools_storage_info_title, R.string.assistant_page_local_tools_storage_info_desc, LocalToolOption.StorageInfo, assistant, ::toggleLocalTool)
+            ToolItem(R.string.assistant_page_local_tools_toast_title, R.string.assistant_page_local_tools_toast_desc, LocalToolOption.Toast, assistant, ::toggleLocalTool)
+            ToolItem(R.string.assistant_page_local_tools_post_notification_title, R.string.assistant_page_local_tools_post_notification_desc, LocalToolOption.PostNotification, assistant, ::toggleLocalTool)
+            ToolItem(R.string.assistant_page_local_tools_share_title, R.string.assistant_page_local_tools_share_desc, LocalToolOption.Share, assistant, ::toggleLocalTool)
+            ToolItem(R.string.assistant_page_local_tools_scan_media_title, R.string.assistant_page_local_tools_scan_media_desc, LocalToolOption.ScanMedia, assistant, ::toggleLocalTool)
         }
 
         CardGroup(title = { Text(stringResource(R.string.assistant_page_local_tools_approval_section_title)) }) {
-            ApprovalSwitch(R.string.assistant_page_local_tools_approval_root_shell_title, R.string.assistant_page_local_tools_approval_root_shell_desc, "root_shell", toolApprovalOverrides, onToggleApproval)
-            ApprovalSwitch(R.string.assistant_page_local_tools_approval_pty_exec_title, R.string.assistant_page_local_tools_approval_pty_exec_desc, "pty_exec", toolApprovalOverrides, onToggleApproval)
-            ApprovalSwitch(R.string.assistant_page_local_tools_approval_pty_session_title, R.string.assistant_page_local_tools_approval_pty_session_desc, "pty_session", toolApprovalOverrides, onToggleApproval)
+            item(
+                headlineContent = { Text(stringResource(R.string.assistant_page_local_tools_approval_root_shell_title)) },
+                supportingContent = { Text(stringResource(R.string.assistant_page_local_tools_approval_root_shell_desc)) },
+                trailingContent = { Switch(checked = toolApprovalOverrides["root_shell"] != false, onCheckedChange = { onToggleApproval("root_shell", it) }) }
+            )
+            item(
+                headlineContent = { Text(stringResource(R.string.assistant_page_local_tools_approval_pty_exec_title)) },
+                supportingContent = { Text(stringResource(R.string.assistant_page_local_tools_approval_pty_exec_desc)) },
+                trailingContent = { Switch(checked = toolApprovalOverrides["pty_exec"] != false, onCheckedChange = { onToggleApproval("pty_exec", it) }) }
+            )
+            item(
+                headlineContent = { Text(stringResource(R.string.assistant_page_local_tools_approval_pty_session_title)) },
+                supportingContent = { Text(stringResource(R.string.assistant_page_local_tools_approval_pty_session_desc)) },
+                trailingContent = { Switch(checked = toolApprovalOverrides["pty_session"] != false, onCheckedChange = { onToggleApproval("pty_session", it) }) }
+            )
         }
     }
 }
 
 @Composable
-private fun ToolSwitch(title: Int, desc: Int, option: LocalToolOption, assistant: Assistant, onToggle: (LocalToolOption, Boolean) -> Unit) {
+private fun ToolItem(title: Int, desc: Int, option: LocalToolOption, assistant: Assistant, onToggle: (LocalToolOption, Boolean) -> Unit) {
     CardGroup(Modifier) {
         item(
             headlineContent = { Text(stringResource(title)) },
             supportingContent = { Text(stringResource(desc)) },
             trailingContent = { Switch(checked = assistant.localTools.contains(option), onCheckedChange = { onToggle(option, it) }) }
-        )
-    }
-}
-
-@Composable
-private fun ApprovalSwitch(title: Int, desc: Int, toolName: String, overrides: Map<String, Boolean>, onToggle: (String, Boolean) -> Unit) {
-    CardGroup(Modifier) {
-        item(
-            headlineContent = { Text(stringResource(title)) },
-            supportingContent = { Text(stringResource(desc)) },
-            trailingContent = { Switch(checked = overrides[toolName] != false, onCheckedChange = { onToggle(toolName, it) }) }
         )
     }
 }
