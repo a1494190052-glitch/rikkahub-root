@@ -1348,4 +1348,6 @@
   <string name="shell_audit_source_scheduled">Scheduled</string>
   <string name="extensions_page_shell_audit">Shell Log</string>
   <string name="extensions_page_shell_audit_desc">Audit every shell command the AI runs on your device</string>
+    <string name="theme_name_claude">Claude</string>
+    <string name="theme_name_minimal">极简白</string>
 </resources>
