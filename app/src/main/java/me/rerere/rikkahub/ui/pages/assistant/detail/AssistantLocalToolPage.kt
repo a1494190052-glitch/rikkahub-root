@@ -40,11 +40,7 @@ import org.koin.core.parameter.parametersOf
 
 @Composable
 fun AssistantLocalToolPage(id: String) {
-    val vm: AssistantDetailVM = koinViewModel(
-        parameters = {
-            parametersOf(id)
-        }
-    )
+    val vm: AssistantDetailVM = koinViewModel(parameters = { parametersOf(id) })
     val assistant by vm.assistant.collectAsStateWithLifecycle()
     val settings by vm.settings.collectAsStateWithLifecycle()
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
@@ -52,12 +48,8 @@ fun AssistantLocalToolPage(id: String) {
     Scaffold(
         topBar = {
             LargeFlexibleTopAppBar(
-                title = {
-                    Text(stringResource(R.string.assistant_page_tab_local_tools))
-                },
-                navigationIcon = {
-                    BackButton()
-                },
+                title = { Text(stringResource(R.string.assistant_page_tab_local_tools)) },
+                navigationIcon = { BackButton() },
                 scrollBehavior = scrollBehavior,
                 colors = CustomColors.topBarColors,
             )
@@ -85,23 +77,12 @@ private fun AssistantLocalToolContent(
 ) {
     val context = LocalContext.current
     val toaster = LocalToaster.current
-    val permissionRequiredText =
-        stringResource(R.string.assistant_page_local_tools_screen_time_permission_required)
+    val permissionRequiredText = stringResource(R.string.assistant_page_local_tools_screen_time_permission_required)
 
     val calendarPermissionState = rememberPermissionState(
         permissions = setOf(
-            PermissionInfo(
-                permission = Manifest.permission.READ_CALENDAR,
-                displayName = { Text(stringResource(R.string.permission_calendar_read)) },
-                usage = { Text(stringResource(R.string.permission_calendar_read_desc)) },
-                required = true
-            ),
-            PermissionInfo(
-                permission = Manifest.permission.WRITE_CALENDAR,
-                displayName = { Text(stringResource(R.string.permission_calendar_write)) },
-                usage = { Text(stringResource(R.string.permission_calendar_write_desc)) },
-                required = true
-            ),
+            PermissionInfo(Manifest.permission.READ_CALENDAR, displayName = { Text(stringResource(R.string.permission_calendar_read)) }, usage = { Text(stringResource(R.string.permission_calendar_read_desc)) }, required = true),
+            PermissionInfo(Manifest.permission.WRITE_CALENDAR, displayName = { Text(stringResource(R.string.permission_calendar_write)) }, usage = { Text(stringResource(R.string.permission_calendar_write_desc)) }, required = true),
         )
     )
     PermissionManager(permissionState = calendarPermissionState)
@@ -115,200 +96,67 @@ private fun AssistantLocalToolContent(
             calendarPermissionState.requestPermissions()
             return
         }
-        val newLocalTools = if (enabled) {
-            assistant.localTools + option
-        } else {
-            assistant.localTools - option
-        }
+        val newLocalTools = if (enabled) assistant.localTools + option else assistant.localTools - option
         onUpdate(assistant.copy(localTools = newLocalTools))
     }
 
     Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(horizontal = 16.dp)
-            .padding(innerPadding)
-            .imePadding(),
+        modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp).padding(innerPadding).imePadding(),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         CardGroup {
-            item(
-                headlineContent = {
-                    Text(stringResource(R.string.assistant_page_local_tools_javascript_engine_title))
-                },
-                supportingContent = {
-                    Text(stringResource(R.string.assistant_page_local_tools_javascript_engine_desc))
-                },
-                trailingContent = {
-                    Switch(
-                        checked = assistant.localTools.contains(LocalToolOption.JavascriptEngine),
-                        onCheckedChange = { toggleLocalTool(LocalToolOption.JavascriptEngine, it) }
-                    )
-                }
-            )
-            item(
-                headlineContent = {
-                    Text(stringResource(R.string.assistant_page_local_tools_time_info_title))
-                },
-                supportingContent = {
-                    Text(stringResource(R.string.assistant_page_local_tools_time_info_desc))
-                },
-                trailingContent = {
-                    Switch(
-                        checked = assistant.localTools.contains(LocalToolOption.TimeInfo),
-                        onCheckedChange = { toggleLocalTool(LocalToolOption.TimeInfo, it) }
-                    )
-                }
-            )
-            item(
-                headlineContent = {
-                    Text(stringResource(R.string.assistant_page_local_tools_clipboard_title))
-                },
-                supportingContent = {
-                    Text(stringResource(R.string.assistant_page_local_tools_clipboard_desc))
-                },
-                trailingContent = {
-                    Switch(
-                        checked = assistant.localTools.contains(LocalToolOption.Clipboard),
-                        onCheckedChange = { toggleLocalTool(LocalToolOption.Clipboard, it) }
-                    )
-                }
-            )
-            item(
-                headlineContent = {
-                    Text(stringResource(R.string.assistant_page_local_tools_tts_title))
-                },
-                supportingContent = {
-                    Text(stringResource(R.string.assistant_page_local_tools_tts_desc))
-                },
-                trailingContent = {
-                    Switch(
-                        checked = assistant.localTools.contains(LocalToolOption.Tts),
-                        onCheckedChange = { toggleLocalTool(LocalToolOption.Tts, it) }
-                    )
-                }
-            )
-            item(
-                headlineContent = {
-                    Text(stringResource(R.string.assistant_page_local_tools_ask_user_title))
-                },
-                supportingContent = {
-                    Text(stringResource(R.string.assistant_page_local_tools_ask_user_desc))
-                },
-                trailingContent = {
-                    Switch(
-                        checked = assistant.localTools.contains(LocalToolOption.AskUser),
-                        onCheckedChange = { toggleLocalTool(LocalToolOption.AskUser, it) }
-                    )
-                }
-            )
-            item(
-                headlineContent = {
-                    Text(stringResource(R.string.assistant_page_local_tools_screen_time_title))
-                },
-                supportingContent = {
-                    Text(stringResource(R.string.assistant_page_local_tools_screen_time_desc))
-                },
-                trailingContent = {
-                    Switch(
-                        checked = assistant.localTools.contains(LocalToolOption.ScreenTime),
-                        onCheckedChange = { toggleLocalTool(LocalToolOption.ScreenTime, it) }
-                    )
-                }
-            )
-            item(
-                headlineContent = {
-                    Text(stringResource(R.string.assistant_page_local_tools_calendar_title))
-                },
-                supportingContent = {
-                    Text(stringResource(R.string.assistant_page_local_tools_calendar_desc))
-                },
-                trailingContent = {
-                    Switch(
-                        checked = assistant.localTools.contains(LocalToolOption.Calendar),
-                        onCheckedChange = { toggleLocalTool(LocalToolOption.Calendar, it) }
-                    )
-                }
-            )
-            item(
-                headlineContent = {
-                    Text(stringResource(R.string.assistant_page_local_tools_root_shell_title))
-                },
-                supportingContent = {
-                    Text(stringResource(R.string.assistant_page_local_tools_root_shell_desc))
-                },
-                trailingContent = {
-                    Switch(
-                        checked = assistant.localTools.contains(LocalToolOption.RootShell),
-                        onCheckedChange = { toggleLocalTool(LocalToolOption.RootShell, it) }
-                    )
-                }
-            )
-            item(
-                headlineContent = {
-                    Text(stringResource(R.string.assistant_page_local_tools_sub_agents_title))
-                },
-                supportingContent = {
-                    Text(stringResource(R.string.assistant_page_local_tools_sub_agents_desc))
-                },
-                trailingContent = {
-                    Switch(
-                        checked = assistant.localTools.contains(LocalToolOption.SubAgents),
-                        onCheckedChange = { toggleLocalTool(LocalToolOption.SubAgents, it) }
-                    )
-                }
-            )
-            item(
-                headlineContent = {
-                    Text(stringResource(R.string.assistant_page_local_tools_scheduler_title))
-                },
-                supportingContent = {
-                    Text(stringResource(R.string.assistant_page_local_tools_scheduler_desc))
-                },
-                trailingContent = {
-                    Switch(
-                        checked = assistant.localTools.contains(LocalToolOption.Scheduler),
-                        onCheckedChange = { toggleLocalTool(LocalToolOption.Scheduler, it) }
-                    )
-                }
-            )
+            ToolSwitch(R.string.assistant_page_local_tools_javascript_engine_title, R.string.assistant_page_local_tools_javascript_engine_desc, LocalToolOption.JavascriptEngine, assistant, ::toggleLocalTool)
+            ToolSwitch(R.string.assistant_page_local_tools_time_info_title, R.string.assistant_page_local_tools_time_info_desc, LocalToolOption.TimeInfo, assistant, ::toggleLocalTool)
+            ToolSwitch(R.string.assistant_page_local_tools_clipboard_title, R.string.assistant_page_local_tools_clipboard_desc, LocalToolOption.Clipboard, assistant, ::toggleLocalTool)
+            ToolSwitch(R.string.assistant_page_local_tools_tts_title, R.string.assistant_page_local_tools_tts_desc, LocalToolOption.Tts, assistant, ::toggleLocalTool)
+            ToolSwitch(R.string.assistant_page_local_tools_ask_user_title, R.string.assistant_page_local_tools_ask_user_desc, LocalToolOption.AskUser, assistant, ::toggleLocalTool)
+            ToolSwitch(R.string.assistant_page_local_tools_screen_time_title, R.string.assistant_page_local_tools_screen_time_desc, LocalToolOption.ScreenTime, assistant, ::toggleLocalTool)
+            ToolSwitch(R.string.assistant_page_local_tools_calendar_title, R.string.assistant_page_local_tools_calendar_desc, LocalToolOption.Calendar, assistant, ::toggleLocalTool)
+            ToolSwitch(R.string.assistant_page_local_tools_root_shell_title, R.string.assistant_page_local_tools_root_shell_desc, LocalToolOption.RootShell, assistant, ::toggleLocalTool)
+            ToolSwitch(R.string.assistant_page_local_tools_sub_agents_title, R.string.assistant_page_local_tools_sub_agents_desc, LocalToolOption.SubAgents, assistant, ::toggleLocalTool)
+            ToolSwitch(R.string.assistant_page_local_tools_scheduler_title, R.string.assistant_page_local_tools_scheduler_desc, LocalToolOption.Scheduler, assistant, ::toggleLocalTool)
+            // 橘瓣移植系统工具
+            ToolSwitch(R.string.assistant_page_local_tools_battery_title, R.string.assistant_page_local_tools_battery_desc, LocalToolOption.Battery, assistant, ::toggleLocalTool)
+            ToolSwitch(R.string.assistant_page_local_tools_brightness_title, R.string.assistant_page_local_tools_brightness_desc, LocalToolOption.Brightness, assistant, ::toggleLocalTool)
+            ToolSwitch(R.string.assistant_page_local_tools_torch_title, R.string.assistant_page_local_tools_torch_desc, LocalToolOption.Torch, assistant, ::toggleLocalTool)
+            ToolSwitch(R.string.assistant_page_local_tools_vibrate_title, R.string.assistant_page_local_tools_vibrate_desc, LocalToolOption.Vibrate, assistant, ::toggleLocalTool)
+            ToolSwitch(R.string.assistant_page_local_tools_volume_title, R.string.assistant_page_local_tools_volume_desc, LocalToolOption.Volume, assistant, ::toggleLocalTool)
+            ToolSwitch(R.string.assistant_page_local_tools_wake_screen_title, R.string.assistant_page_local_tools_wake_screen_desc, LocalToolOption.WakeScreen, assistant, ::toggleLocalTool)
+            ToolSwitch(R.string.assistant_page_local_tools_wifi_info_title, R.string.assistant_page_local_tools_wifi_info_desc, LocalToolOption.WifiInfo, assistant, ::toggleLocalTool)
+            ToolSwitch(R.string.assistant_page_local_tools_telephony_info_title, R.string.assistant_page_local_tools_telephony_info_desc, LocalToolOption.TelephonyInfo, assistant, ::toggleLocalTool)
+            ToolSwitch(R.string.assistant_page_local_tools_storage_info_title, R.string.assistant_page_local_tools_storage_info_desc, LocalToolOption.StorageInfo, assistant, ::toggleLocalTool)
+            ToolSwitch(R.string.assistant_page_local_tools_toast_title, R.string.assistant_page_local_tools_toast_desc, LocalToolOption.Toast, assistant, ::toggleLocalTool)
+            ToolSwitch(R.string.assistant_page_local_tools_post_notification_title, R.string.assistant_page_local_tools_post_notification_desc, LocalToolOption.PostNotification, assistant, ::toggleLocalTool)
+            ToolSwitch(R.string.assistant_page_local_tools_share_title, R.string.assistant_page_local_tools_share_desc, LocalToolOption.Share, assistant, ::toggleLocalTool)
+            ToolSwitch(R.string.assistant_page_local_tools_scan_media_title, R.string.assistant_page_local_tools_scan_media_desc, LocalToolOption.ScanMedia, assistant, ::toggleLocalTool)
         }
 
-        // 工具审批: 关闭后对应工具调用直接执行不再询问 (全局生效, 高危命令仍被安全闸门拦截)
-        CardGroup(
-            title = { Text(stringResource(R.string.assistant_page_local_tools_approval_section_title)) }
-        ) {
-            item(
-                headlineContent = { Text(stringResource(R.string.assistant_page_local_tools_approval_root_shell_title)) },
-                supportingContent = { Text(stringResource(R.string.assistant_page_local_tools_approval_root_shell_desc)) },
-                trailingContent = {
-                    Switch(
-                        checked = toolApprovalOverrides["root_shell"] != false,
-                        onCheckedChange = { onToggleApproval("root_shell", it) }
-                    )
-                }
-            )
-            item(
-                headlineContent = { Text(stringResource(R.string.assistant_page_local_tools_approval_pty_exec_title)) },
-                supportingContent = { Text(stringResource(R.string.assistant_page_local_tools_approval_pty_exec_desc)) },
-                trailingContent = {
-                    Switch(
-                        checked = toolApprovalOverrides["pty_exec"] != false,
-                        onCheckedChange = { onToggleApproval("pty_exec", it) }
-                    )
-                }
-            )
-            item(
-                headlineContent = { Text(stringResource(R.string.assistant_page_local_tools_approval_pty_session_title)) },
-                supportingContent = { Text(stringResource(R.string.assistant_page_local_tools_approval_pty_session_desc)) },
-                trailingContent = {
-                    Switch(
-                        checked = toolApprovalOverrides["pty_session"] != false,
-                        onCheckedChange = { onToggleApproval("pty_session", it) }
-                    )
-                }
-            )
+        CardGroup(title = { Text(stringResource(R.string.assistant_page_local_tools_approval_section_title)) }) {
+            ApprovalSwitch(R.string.assistant_page_local_tools_approval_root_shell_title, R.string.assistant_page_local_tools_approval_root_shell_desc, "root_shell", toolApprovalOverrides, onToggleApproval)
+            ApprovalSwitch(R.string.assistant_page_local_tools_approval_pty_exec_title, R.string.assistant_page_local_tools_approval_pty_exec_desc, "pty_exec", toolApprovalOverrides, onToggleApproval)
+            ApprovalSwitch(R.string.assistant_page_local_tools_approval_pty_session_title, R.string.assistant_page_local_tools_approval_pty_session_desc, "pty_session", toolApprovalOverrides, onToggleApproval)
         }
+    }
+}
+
+@Composable
+private fun ToolSwitch(title: Int, desc: Int, option: LocalToolOption, assistant: Assistant, onToggle: (LocalToolOption, Boolean) -> Unit) {
+    CardGroup(Modifier) {
+        item(
+            headlineContent = { Text(stringResource(title)) },
+            supportingContent = { Text(stringResource(desc)) },
+            trailingContent = { Switch(checked = assistant.localTools.contains(option), onCheckedChange = { onToggle(option, it) }) }
+        )
+    }
+}
+
+@Composable
+private fun ApprovalSwitch(title: Int, desc: Int, toolName: String, overrides: Map<String, Boolean>, onToggle: (String, Boolean) -> Unit) {
+    CardGroup(Modifier) {
+        item(
+            headlineContent = { Text(stringResource(title)) },
+            supportingContent = { Text(stringResource(desc)) },
+            trailingContent = { Switch(checked = overrides[toolName] != false, onCheckedChange = { onToggle(toolName, it) }) }
+        )
     }
 }
