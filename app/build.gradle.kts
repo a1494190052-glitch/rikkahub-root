@@ -20,33 +20,25 @@ android {
         applicationId = "me.rerere.rikkahub"
         minSdk = 26
         targetSdk = 37
-        // 二改：CI 自动递增版本号 (run_number 单调递增, 本地构建回退为基础版本)
+        // 橘瓣移植版：版本号从 2.4.3 起
         val ciRunNumber = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull() ?: 0
-        versionCode = 170 + ciRunNumber
-        versionName = "2.4.2" + if (ciRunNumber > 0) "-r$ciRunNumber" else ""
+        versionCode = 300 + ciRunNumber
+        versionName = "2.4.3" + if (ciRunNumber > 0) "-r$ciRunNumber" else ""
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-
-        // 二改：移除 ndk abiFilters —— 与 splits.abi 冲突，ABI 由 splits 控制
     }
 
     splits {
         abi {
-            // AppBundle tasks usually contain "bundle" in their name
-            //noinspection WrongGradleMethod
             val isBuildingBundle = gradle.startParameter.taskNames.any { it.lowercase().contains("bundle") }
             isEnable = !isBuildingBundle
             reset()
-            // 二改：只构建 arm64-v8a（手机真机使用，加快 CI 构建）
             include("arm64-v8a")
             isUniversalApk = false
         }
     }
 
     signingConfigs {
-        // 二改：CI/本地固定签名。把 keystore.jks 放到项目根目录 signing/ 下，
-        // 并通过环境变量 CI_KEYSTORE_PASSWORD 提供密码即可启用；
-        // 文件不存在时回退到默认 debug 签名，不影响官方构建逻辑。
         create("ci") {
             val ksFile = rootProject.file("signing/keystore.jks")
             if (ksFile.exists()) {
@@ -59,15 +51,12 @@ android {
         create("release") {
             val localProperties = Properties()
             val localPropertiesFile = rootProject.file("local.properties")
-
             if (localPropertiesFile.exists()) {
                 localProperties.load(FileInputStream(localPropertiesFile))
-
                 val storeFilePath = localProperties.getProperty("storeFile")
                 val storePasswordValue = localProperties.getProperty("storePassword")
                 val keyAliasValue = localProperties.getProperty("keyAlias")
                 val keyPasswordValue = localProperties.getProperty("keyPassword")
-
                 if (storeFilePath != null && storePasswordValue != null &&
                     keyAliasValue != null && keyPasswordValue != null
                 ) {
@@ -85,10 +74,7 @@ android {
             signingConfig = signingConfigs.getByName("release")
             isMinifyEnabled = false
             isShrinkResources = false
-            proguardFiles(
-                getDefaultProguardFile("proguard-android-optimize.txt"),
-                "proguard-rules.pro"
-            )
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
             buildConfigField("String", "VERSION_NAME", "\"${android.defaultConfig.versionName}\"")
             buildConfigField("String", "VERSION_CODE", "\"${android.defaultConfig.versionCode}\"")
         }
@@ -97,10 +83,7 @@ android {
             versionNameSuffix = "-root"
             isMinifyEnabled = false
             isShrinkResources = false
-            proguardFiles(
-                getDefaultProguardFile("proguard-android-optimize.txt"),
-                "proguard-rules.pro"
-            )
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
             if (rootProject.file("signing/keystore.jks").exists()) {
                 signingConfig = signingConfigs.getByName("ci")
             }
@@ -144,9 +127,7 @@ android {
 }
 
 composeCompiler {
-    stabilityConfigurationFiles.add(
-        project.layout.projectDirectory.file("compose_compiler_config.conf")
-    )
+    stabilityConfigurationFiles.add(project.layout.projectDirectory.file("compose_compiler_config.conf"))
 }
 
 tasks.register("buildAll") {
@@ -174,8 +155,6 @@ dependencies {
     implementation(libs.androidx.profileinstaller)
     implementation(libs.termux.terminal.view)
     implementation(libs.guava.listenablefuture)
-
-    // Compose
     implementation(libs.androidx.activity.compose)
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.ui)
@@ -184,124 +163,64 @@ dependencies {
     implementation(libs.androidx.material3)
     implementation(libs.androidx.material3.adaptive)
     implementation(libs.androidx.material3.adaptive.layout)
-
-    // Navigation 3
     implementation(libs.androidx.navigation3.runtime)
     implementation(libs.androidx.navigation3.ui)
     implementation(libs.androidx.lifecycle.viewmodel.navigation3)
     implementation(libs.androidx.material3.adaptive.navigation3)
-
-    // Firebase
     implementation(platform(libs.firebase.bom))
     implementation(libs.firebase.analytics)
-
-    // DataStore
     implementation(libs.androidx.datastore.preferences)
-
-    // Image metadata extractor
-    // https://github.com/drewnoakes/metadata-extractor
     implementation(libs.metadata.extractor)
-
-    // Haze (background blur)
     implementation(libs.haze)
     implementation(libs.haze.blur)
     implementation(libs.haze.blur.materials)
-
-    // koin
     implementation(platform(libs.koin.bom))
     implementation(libs.koin.android)
     implementation(libs.koin.compose)
     implementation(libs.koin.androidx.workmanager)
-
-    // jetbrains markdown parser
     implementation(libs.jetbrains.markdown)
-
-    // okhttp
     implementation(libs.okhttp)
     implementation(libs.okhttp.sse)
     implementation(libs.retrofit)
     implementation(libs.retrofit.serialization.json)
-
-    // ktor client
     implementation(libs.ktor.client.core)
     implementation(libs.ktor.client.okhttp)
     implementation(libs.ktor.client.content.negotiation)
     implementation(libs.ktor.serialization.kotlinx.json)
-
-    // ucrop
     implementation(libs.ucrop)
-
-    // pebble (template engine)
     implementation(libs.pebble)
-
-    // java-diff-utils (unified diff)
     implementation(libs.diffutils)
-
-    // coil
     implementation(libs.coil.compose)
     implementation(libs.coil.gif)
     implementation(libs.coil.okhttp)
     implementation(libs.coil.svg)
     implementation(libs.coil.cache.control)
-
-    // serialization
     implementation(libs.kotlinx.serialization.json)
-
-    // zxing
     implementation(libs.zxing.core)
-
-    // quickie (qrcode scanner)
     implementation(libs.quickie.bundled)
     implementation(libs.barcode.scanning)
     implementation(libs.androidx.camera.core)
-
-    // Room
     implementation(libs.androidx.room.runtime)
     implementation(libs.androidx.room.ktx)
     implementation(libs.androidx.room.paging)
     baselineProfile(project(":app:baselineprofile"))
     ksp(libs.androidx.room.compiler)
-
-    // Paging3
     implementation(libs.androidx.paging.runtime)
     implementation(libs.androidx.paging.compose)
-
-    // Apache Commons Text
     implementation(libs.commons.text)
-
-    // Toast (Sonner)
     implementation(libs.sonner)
-
-    // Reorderable (https://github.com/Calvin-LL/Reorderable/)
     implementation(libs.reorderable)
-
-    // lucide icons
     implementation(libs.lucide.icons)
     implementation(libs.huge.icons)
-
-    // image viewer
     implementation(libs.image.viewer)
-
-    // JLatexMath
-    // https://github.com/rikkahub/jlatexmath-android
     implementation(libs.jlatexmath)
     implementation(libs.jlatexmath.font.greek)
     implementation(libs.jlatexmath.font.cyrillic)
-
-    // mcp
     implementation(libs.modelcontextprotocol.kotlin.sdk)
-
-    // jmDNS (mDNS/Bonjour for .local hostname)
     implementation(libs.jmdns)
-
-    // SLF4J Android binding — routes Ktor/SLF4J logs to logcat
     implementation(libs.slf4j.api)
     implementation(libs.slf4j.android)
-
-    // sqlite-android (requery SQLite for Android)
     implementation(libs.sqlite.android)
-
-    // modules
     implementation(project(":ai"))
     implementation(project(":web"))
     implementation(project(":document"))
@@ -313,11 +232,6 @@ dependencies {
     implementation(project(":workspace"))
     implementation(fileTree(mapOf("dir" to "libs", "include" to listOf("*.jar", "*.aar"))))
     implementation(kotlin("reflect"))
-
-    // Leak Canary
-    // debugImplementation(libs.leakcanary.android)
-
-    // tests
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
