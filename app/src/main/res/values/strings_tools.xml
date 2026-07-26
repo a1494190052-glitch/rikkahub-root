@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+  <string name="assistant_page_local_tools_battery_title">Battery Info</string>
+  <string name="assistant_page_local_tools_battery_desc">Let the AI read device battery status, level, and charging info</string>
+  <string name="assistant_page_local_tools_brightness_title">Brightness</string>
+  <string name="assistant_page_local_tools_brightness_desc">Let the AI read and adjust screen brightness. Requires WRITE_SETTINGS permission for setting brightness.</string>
+  <string name="assistant_page_local_tools_torch_title">Flashlight</string>
+  <string name="assistant_page_local_tools_torch_desc">Let the AI turn the device flashlight on or off</string>
+  <string name="assistant_page_local_tools_vibrate_title">Vibrate</string>
+  <string name="assistant_page_local_tools_vibrate_desc">Let the AI trigger device vibration with custom duration or pattern</string>
+  <string name="assistant_page_local_tools_volume_title">Volume Control</string>
+  <string name="assistant_page_local_tools_volume_desc">Let the AI read and adjust audio volume for media, ring, notification, alarm, etc.</string>
+  <string name="assistant_page_local_tools_wake_screen_title">Wake Screen</string>
+  <string name="assistant_page_local_tools_wake_screen_desc">Let the AI wake up the screen when it is off</string>
+  <string name="assistant_page_local_tools_wifi_info_title">WiFi Info</string>
+  <string name="assistant_page_local_tools_wifi_info_desc">Let the AI read current WiFi connection info (SSID, signal, IP). Requires location permission.</string>
+  <string name="assistant_page_local_tools_telephony_info_title">Phone Info</string>
+  <string name="assistant_page_local_tools_telephony_info_desc">Let the AI read SIM card and carrier information. Requires READ_PHONE_STATE permission.</string>
+  <string name="assistant_page_local_tools_storage_info_title">Storage Info</string>
+  <string name="assistant_page_local_tools_storage_info_desc">Let the AI read internal and external storage usage</string>
+  <string name="assistant_page_local_tools_toast_title">Toast</string>
+  <string name="assistant_page_local_tools_toast_desc">Let the AI show brief toast popup notifications on screen</string>
+  <string name="assistant_page_local_tools_post_notification_title">Post Notification</string>
+  <string name="assistant_page_local_tools_post_notification_desc">Let the AI send system notifications. Requires notification permission.</string>
+  <string name="assistant_page_local_tools_share_title">Share</string>
+  <string name="assistant_page_local_tools_share_desc">Let the AI open the system share sheet with text or URLs</string>
+  <string name="assistant_page_local_tools_scan_media_title">Media Scanner</string>
+  <string name="assistant_page_local_tools_scan_media_desc">Let the AI trigger media file scanning so files appear in gallery apps</string>
+</resources>
