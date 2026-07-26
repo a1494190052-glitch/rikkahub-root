@@ -1,0 +1,33 @@
+{
+  "name": "RikkaHub Root Build",
+  "image": "mcr.microsoft.com/devcontainers/universal:2",
+  "features": {
+    "ghcr.io/devcontainers/features/android-sdk:1": {
+      "platforms": "platforms;android-37",
+      "buildTools": "build-tools;36.0.0 build-tools;36.1.0"
+    },
+    "ghcr.io/devcontainers/features/java:1": {
+      "version": "17",
+      "installGradle": true
+    },
+    "ghcr.io/devcontainers/features/node:1": {
+      "version": "20"
+    }
+  },
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "vscjava.vscode-java-pack",
+        "vscjava.vscode-gradle",
+        "fwcd.kotlin",
+        "github.vscode-github-actions"
+      ]
+    }
+  },
+  "postCreateCommand": "cd web-ui && pnpm install",
+  "forwardPorts": [8080],
+  "containerEnv": {
+    "GRADLE_OPTS": "-Dorg.gradle.parallel=true -Dorg.gradle.workers.max=8 -Dorg.gradle.caching=true",
+    "ANDROID_SDK_ROOT": "/usr/local/android/sdk"
+  }
+}
