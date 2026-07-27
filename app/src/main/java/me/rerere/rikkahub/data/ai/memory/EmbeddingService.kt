@@ -39,7 +39,7 @@ class EmbeddingService(
     private val json: Json,
 ) {
     // 简单 LRU 缓存：text hash -> embedding
-    private val embeddingCache = ConcurrentHashMap<Int, FloatArray>()
+    private val embeddingCache = ConcurrentHashMap<String, FloatArray>()
 
     /**
      * 获取第一个可用的 OpenAI 兼容 provider 配置
@@ -78,7 +78,7 @@ class EmbeddingService(
 
         // 检查缓存
         texts.forEachIndexed { index, text ->
-            val cacheKey = text.hashCode()
+            val cacheKey = text
             val cached = embeddingCache[cacheKey]
             if (cached != null) {
                 results[index] = cached
@@ -99,7 +99,7 @@ class EmbeddingService(
                     val originalIndex = uncachedIndices[i]
                     results[originalIndex] = embedding
                     // 存入缓存
-                    val cacheKey = uncachedTexts[i].hashCode()
+                    val cacheKey = uncachedTexts[i]
                     if (embeddingCache.size >= MAX_CACHE_SIZE) {
                         val keysToRemove = embeddingCache.keys.take(MAX_CACHE_SIZE / 2)
                         keysToRemove.forEach { embeddingCache.remove(it) }
