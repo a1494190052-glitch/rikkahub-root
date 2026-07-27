@@ -14,11 +14,9 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.floatOrNull
 import kotlinx.serialization.json.intOrNull
-import kotlinx.serialization.json.jsonArray
 import me.rerere.ai.core.InputSchema
 import me.rerere.ai.core.Tool
 import me.rerere.ai.ui.UIMessagePart
-import me.rerere.rikkahub.data.ai.tools.local.LocalToolOption
 import kotlin.uuid.Uuid
 
 val SUBAGENT_TOOL_NAMES: Set<String> = setOf("spawn_subagent", "ask_btw", "manage_subagent_profile")
@@ -83,9 +81,7 @@ $profileListText
                     put("profile_name", buildJsonObject {
                         put("type", "string")
                         put("description", "The subagent profile to spawn.")
-                        put("enum", kotlinx.serialization.json.buildJsonArray {
-                            profileNames.forEach { add(it) }
-                        })
+                        put("enum", kotlinx.serialization.json.buildJsonArray { profileNames.forEach { add(it) } })
                     })
                     put("task", buildJsonObject {
                         put("type", "string")
@@ -101,10 +97,8 @@ $profileListText
         },
         execute = { args ->
             val params = args.jsonObject
-            val profileName = params["profile_name"]?.jsonPrimitive?.contentOrNull
-                ?: error("profile_name is required")
-            val task = params["task"]?.jsonPrimitive?.contentOrNull
-                ?: error("task is required")
+            val profileName = params["profile_name"]?.jsonPrimitive?.contentOrNull ?: error("profile_name is required")
+            val task = params["task"]?.jsonPrimitive?.contentOrNull ?: error("task is required")
             val description = params["description"]?.jsonPrimitive?.contentOrNull.orEmpty()
             val result = spawn(profileName, task, description)
             val payload = buildJsonObject {
@@ -136,17 +130,13 @@ $profileListText
         parameters = {
             InputSchema.Obj(
                 properties = buildJsonObject {
-                    put("question", buildJsonObject {
-                        put("type", "string")
-                        put("description", "The self-contained side question to ask")
-                    })
+                    put("question", buildJsonObject { put("type", "string"); put("description", "The self-contained side question to ask") })
                 },
                 required = listOf("question"),
             )
         },
         execute = { args ->
-            val question = args.jsonObject["question"]?.jsonPrimitive?.contentOrNull
-                ?: error("question is required")
+            val question = args.jsonObject["question"]?.jsonPrimitive?.contentOrNull ?: error("question is required")
             val answer = askBtw(question)
             listOf(UIMessagePart.Text(buildJsonObject { put("answer", JsonPrimitive(answer)) }.toString()))
         },
@@ -163,27 +153,22 @@ fun createManageSubagentTool(
     manage: suspend (action: String, name: String, profile: SubagentProfile?) -> String,
 ): Tool = Tool(
     name = "manage_subagent_profile",
-    description = """Manage the subagent profiles (create / update / delete / list). Actions: list, create, update, delete.""".trimIndent(),
+    description = """Manage subagent profiles (create / update / delete / list). Use to adapt your delegation toolkit.""".trimIndent(),
     parameters = {
         InputSchema.Obj(
             properties = buildJsonObject {
                 put("action", buildJsonObject {
                     put("type", "string")
-                    put("enum", kotlinx.serialization.json.buildJsonArray {
-                        listOf("list", "create", "update", "delete").forEach { add(it) }
-                    })
+                    put("enum", kotlinx.serialization.json.buildJsonArray { listOf("list", "create", "update", "delete").forEach { add(it) } })
                     put("description", "One of: list, create, update, delete")
                 })
-                put("name", buildJsonObject { put("type", "string"); put("description", "Profile name") })
+                put("name", buildJsonObject { put("type", "string"); put("description", "Profile name (lowercase [a-z][a-z0-9_]*)") })
                 put("display_name", buildJsonObject { put("type", "string") })
                 put("profile_description", buildJsonObject { put("type", "string") })
                 put("system_prompt", buildJsonObject { put("type", "string") })
                 put("model_id", buildJsonObject { put("type", "string") })
                 put("inherit_tools", buildJsonObject { put("type", "boolean") })
-                put("excluded_tools", buildJsonObject {
-                    put("type", "array")
-                    put("items", buildJsonObject { put("type", "string") })
-                })
+                put("excluded_tools", buildJsonObject { put("type", "array"); put("items", buildJsonObject { put("type", "string") }) })
                 put("max_steps", buildJsonObject { put("type", "integer") })
                 put("stream_output", buildJsonObject { put("type", "boolean") })
                 put("enable_memory", buildJsonObject { put("type", "boolean") })
@@ -199,7 +184,7 @@ fun createManageSubagentTool(
         val action = params["action"]?.jsonPrimitive?.contentOrNull ?: error("action is required")
         val name = params["name"]?.jsonPrimitive?.contentOrNull.orEmpty()
         when (action) {
-            "list" -> { listOf(UIMessagePart.Text(manage("list", "", null))) }
+            "list" -> listOf(UIMessagePart.Text(manage("list", "", null)))
             "delete" -> {
                 if (name.isBlank()) error("name is required for delete")
                 listOf(UIMessagePart.Text(manage("delete", name, null)))
@@ -207,10 +192,8 @@ fun createManageSubagentTool(
             "create", "update" -> {
                 if (name.isBlank()) error("name is required for $action")
                 if (!name.matches(SubagentProfile.IdentifierRegex)) error("name must be lowercase [a-z][a-z0-9_]*: $name")
-                val base = if (action == "update") profiles.firstOrNull { it.name == name }
-                    ?: error("profile '$name' not found")
-                else SubagentProfile(name = name)
-                val updated = base.applyPatch(params, json)
+                val base = if (action == "update") profiles.firstOrNull { it.name == name } ?: error("profile '$name' not found") else SubagentProfile(name = name)
+                val updated = base.applyPatch(params)
                 listOf(UIMessagePart.Text(manage(action, name, updated)))
             }
             else -> error("unknown action: $action")
@@ -218,14 +201,12 @@ fun createManageSubagentTool(
     },
 )
 
-private fun SubagentProfile.applyPatch(params: JsonObject, json: Json): SubagentProfile {
+private fun SubagentProfile.applyPatch(params: JsonObject): SubagentProfile {
     fun str(key: String): String? = params[key]?.jsonPrimitive?.contentOrNull
     fun bool(key: String): Boolean? = params[key]?.jsonPrimitive?.booleanOrNull
     fun int(key: String): Int? = params[key]?.jsonPrimitive?.intOrNull
     fun flt(key: String): Float? = params[key]?.jsonPrimitive?.floatOrNull
-    fun strList(key: String): List<String> = (params[key] as? JsonArray)?.mapNotNull {
-        runCatching { it.jsonPrimitive.content }.getOrNull()
-    } ?: emptyList()
+    fun strList(key: String): List<String> = (params[key] as? JsonArray)?.mapNotNull { runCatching { it.jsonPrimitive.content }.getOrNull() } ?: emptyList()
     fun optStrSet(key: String): Set<String>? = if (key in params) strList(key).toSet() else null
 
     return copy(
