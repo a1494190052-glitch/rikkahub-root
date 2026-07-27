@@ -111,373 +111,140 @@ import kotlin.uuid.Uuid
 
 private const val TAG = "ChatService"
 
-internal fun backgroundTextGenerationParams(
-    model: Model,
-    reasoningLevel: ReasoningLevel = ReasoningLevel.AUTO,
-): TextGenerationParams = TextGenerationParams(
-    model = model,
-    reasoningLevel = reasoningLevel,
-    customHeaders = model.customHeaders,
-    customBody = model.customBodies,
-)
+internal fun backgroundTextGenerationParams(model: Model, reasoningLevel: ReasoningLevel = ReasoningLevel.AUTO) = TextGenerationParams(model = model, reasoningLevel = reasoningLevel, customHeaders = model.customHeaders, customBody = model.customBodies)
 
-data class ChatError(
-    val id: Uuid = Uuid.random(),
-    val title: String? = null,
-    val error: Throwable,
-    val conversationId: Uuid? = null,
-    val timestamp: Long = System.currentTimeMillis(),
-    val solution: ChatErrorSolution? = null,
-)
+data class ChatError(val id: Uuid = Uuid.random(), val title: String? = null, val error: Throwable, val conversationId: Uuid? = null, val timestamp: Long = System.currentTimeMillis(), val solution: ChatErrorSolution? = null)
 
-enum class ChatErrorSolution {
-    CheckTitleModelSettings,
-}
+enum class ChatErrorSolution { CheckTitleModelSettings }
 
-private val inputTransformers by lazy {
-    listOf(
-        TimeReminderTransformer,
-        PromptInjectionTransformer,
-        PlaceholderTransformer,
-        DocumentAsPromptTransformer,
-        OcrTransformer,
-        RegexInputTransformer,
-    )
-}
-
-private val outputTransformers by lazy {
-    listOf(
-        ThinkTagTransformer,
-        Base64ImageToLocalFileTransformer,
-        RegexOutputTransformer,
-    )
-}
+private val inputTransformers by lazy { listOf(TimeReminderTransformer, PromptInjectionTransformer, PlaceholderTransformer, DocumentAsPromptTransformer, OcrTransformer, RegexInputTransformer) }
+private val outputTransformers by lazy { listOf(ThinkTagTransformer, Base64ImageToLocalFileTransformer, RegexOutputTransformer) }
 
 class ChatService(
-    private val context: Application,
-    private val appScope: AppScope,
-    private val appEventBus: AppEventBus,
-    private val settingsStore: SettingsStore,
-    private val conversationRepo: ConversationRepository,
-    private val memoryRepository: MemoryRepository,
-    private val generationHandler: GenerationHandler,
-    private val templateTransformer: TemplateTransformer,
-    private val providerManager: ProviderManager,
-    private val localTools: LocalTools,
-    private val subAgentExecutor: me.rerere.rikkahub.data.ai.tools.local.SubAgentExecutor,
+    private val context: Application, private val appScope: AppScope, private val appEventBus: AppEventBus,
+    private val settingsStore: SettingsStore, private val conversationRepo: ConversationRepository,
+    private val memoryRepository: MemoryRepository, private val generationHandler: GenerationHandler,
+    private val templateTransformer: TemplateTransformer, private val providerManager: ProviderManager,
+    private val localTools: LocalTools, private val subAgentExecutor: me.rerere.rikkahub.data.ai.tools.local.SubAgentExecutor,
     private val scheduledTaskRepository: me.rerere.rikkahub.service.scheduler.ScheduledTaskRepository,
-    val mcpManager: McpManager,
-    private val filesManager: FilesManager,
-    private val skillManager: SkillManager,
-    private val workspaceRepository: WorkspaceRepository,
-    private val folderRepository: FolderRepository,
+    val mcpManager: McpManager, private val filesManager: FilesManager, private val skillManager: SkillManager,
+    private val workspaceRepository: WorkspaceRepository, private val folderRepository: FolderRepository,
     private val shellSessionManager: me.rerere.workspace.ShellSessionManager,
     private val backgroundShellManager: me.rerere.rikkahub.service.shell.BackgroundShellManager,
     private val shellAuditLogger: me.rerere.rikkahub.service.shell.ShellAuditLogger,
-    // ---- 子代理系统 (kimi-code) ----
-    private val subagentHost: SubagentHost,
-    private val json: Json,
+    private val subagentHost: SubagentHost, private val json: Json,
 ) {
     private val workspaceReminderTransformer = WorkspaceReminderTransformer(workspaceRepository)
-
     private val sessions = ConcurrentHashMap<Uuid, ConversationSession>()
     private val _sessionsVersion = MutableStateFlow(0L)
-
     private val _errors = MutableStateFlow<List<ChatError>>(emptyList())
     val errors: StateFlow<List<ChatError>> = _errors.asStateFlow()
-
-    fun addError(
-        error: Throwable,
-        conversationId: Uuid? = null,
-        title: String? = null,
-        solution: ChatErrorSolution? = null,
-    ) {
-        if (error is CancellationException) return
-        _errors.update {
-            it + ChatError(title = title, error = error, conversationId = conversationId, solution = solution)
-        }
-    }
-
-    fun dismissError(id: Uuid) {
-        _errors.update { list -> list.filter { it.id != id } }
-    }
-
-    fun clearAllErrors() {
-        _errors.value = emptyList()
-    }
-
+    fun addError(error: Throwable, conversationId: Uuid? = null, title: String? = null, solution: ChatErrorSolution? = null) { if (error is CancellationException) return; _errors.update { it + ChatError(title = title, error = error, conversationId = conversationId, solution = solution) } }
+    fun dismissError(id: Uuid) { _errors.update { list -> list.filter { it.id != id } } }
+    fun clearAllErrors() { _errors.value = emptyList() }
     private val _generationDoneFlow = MutableSharedFlow<Uuid>()
     val generationDoneFlow: SharedFlow<Uuid> = _generationDoneFlow.asSharedFlow()
 
-    fun cleanup() = runCatching {
-        sessions.values.forEach { it.cleanup() }
-        sessions.clear()
+    fun cleanup() = runCatching { sessions.values.forEach { it.cleanup() }; sessions.clear() }
+
+    private fun getOrCreateSession(conversationId: Uuid) = sessions.computeIfAbsent(conversationId) { id ->
+        val settings = settingsStore.settingsFlow.value
+        ConversationSession(id = id, initial = Conversation.ofId(id = id, assistantId = settings.getCurrentAssistant().id), scope = appScope, onIdle = { removeSession(it) })
+            .also { _sessionsVersion.value++; Log.i(TAG, "createSession: $id (total: ${sessions.size + 1})") }
     }
-
-    // ---- Session ----
-
-    private fun getOrCreateSession(conversationId: Uuid): ConversationSession {
-        return sessions.computeIfAbsent(conversationId) { id ->
-            val settings = settingsStore.settingsFlow.value
-            ConversationSession(
-                id = id,
-                initial = Conversation.ofId(id = id, assistantId = settings.getCurrentAssistant().id),
-                scope = appScope,
-                onIdle = { removeSession(it) }
-            ).also {
-                _sessionsVersion.value++
-                Log.i(TAG, "createSession: $id (total: ${sessions.size + 1})")
-            }
-        }
-    }
-
-    private fun removeSession(conversationId: Uuid) {
-        val session = sessions[conversationId] ?: return
-        if (session.isInUse) { Log.d(TAG, "removeSession: skipped $conversationId (still in use)"); return }
-        if (sessions.remove(conversationId, session)) {
-            session.cleanup()
-            _sessionsVersion.value++
-            Log.i(TAG, "removeSession: $conversationId (remaining: ${sessions.size})")
-        }
-    }
-
+    private fun removeSession(conversationId: Uuid) { val session = sessions[conversationId] ?: return; if (session.isInUse) return; if (sessions.remove(conversationId, session)) { session.cleanup(); _sessionsVersion.value++; Log.i(TAG, "removeSession: $conversationId (remaining: ${sessions.size})") } }
     fun addConversationReference(conversationId: Uuid) { getOrCreateSession(conversationId).acquire() }
-
     fun removeConversationReference(conversationId: Uuid) { sessions[conversationId]?.release() }
-
-    private fun launchWithConversationReference(conversationId: Uuid, block: suspend () -> Unit): Job =
-        appScope.launch { addConversationReference(conversationId); try { block() } finally { removeConversationReference(conversationId) } }
-
+    private fun launchWithConversationReference(conversationId: Uuid, block: suspend () -> Unit) = appScope.launch { addConversationReference(conversationId); try { block() } finally { removeConversationReference(conversationId) } }
     fun getConversationFlow(conversationId: Uuid): StateFlow<Conversation> = getOrCreateSession(conversationId).state
-
-    fun getGenerationJobStateFlow(conversationId: Uuid): Flow<Job?> {
-        val session = sessions[conversationId] ?: return flowOf(null)
-        return session.generationJob
-    }
-
-    fun getProcessingStatusFlow(conversationId: Uuid): StateFlow<String?> {
-        val session = sessions[conversationId] ?: return MutableStateFlow(null)
-        return session.processingStatus
-    }
-
-    fun getConversationJobs(): Flow<Map<Uuid, Job?>> {
-        return _sessionsVersion.flatMapLatest {
-            val currentSessions = sessions.values.toList()
-            if (currentSessions.isEmpty()) flowOf(emptyMap())
-            else combine(currentSessions.map { s -> s.generationJob.map { job -> s.id to job } }) { pairs ->
-                pairs.filter { it.second != null }.toMap()
-            }
-        }
+    fun getGenerationJobStateFlow(conversationId: Uuid): Flow<Job?> = sessions[conversationId]?.generationJob ?: flowOf(null)
+    fun getProcessingStatusFlow(conversationId: Uuid): StateFlow<String?> = sessions[conversationId]?.processingStatus ?: MutableStateFlow(null)
+    fun getConversationJobs(): Flow<Map<Uuid, Job?>> = _sessionsVersion.flatMapLatest {
+        val currentSessions = sessions.values.toList()
+        if (currentSessions.isEmpty()) flowOf(emptyMap())
+        else combine(currentSessions.map { s -> s.generationJob.map { job -> s.id to job } }) { pairs -> pairs.filter { it.second != null }.toMap() }
     }
 
     suspend fun initializeConversation(conversationId: Uuid) {
         getOrCreateSession(conversationId)
         val conversation = conversationRepo.getConversationById(conversationId)
-        if (conversation != null) {
-            updateConversation(conversationId, conversation)
-            settingsStore.updateAssistant(conversation.assistantId)
-        } else {
-            val currentSettings = settingsStore.settingsFlowRaw.first()
-            val assistant = currentSettings.getCurrentAssistant()
-            val newConversation = Conversation.ofId(id = conversationId, assistantId = assistant.id, newConversation = true)
-                .updateCurrentMessages(assistant.presetMessages)
-            updateConversation(conversationId, newConversation)
-        }
+        if (conversation != null) { updateConversation(conversationId, conversation); settingsStore.updateAssistant(conversation.assistantId) }
+        else { val currentSettings = settingsStore.settingsFlowRaw.first(); val assistant = currentSettings.getCurrentAssistant(); updateConversation(conversationId, Conversation.ofId(id = conversationId, assistantId = assistant.id, newConversation = true).updateCurrentMessages(assistant.presetMessages)) }
     }
-
-    // ---- 发送消息 ----
 
     fun sendMessage(conversationId: Uuid, content: List<UIMessagePart>, answer: Boolean = true) {
         if (content.isEmptyInputMessage()) return
-        val session = getOrCreateSession(conversationId)
-        val previousJob = session.getJob()
-        previousJob?.cancel()
+        val session = getOrCreateSession(conversationId); session.getJob()?.cancel()
         val job = appScope.launch {
-            try {
-                runCatching { previousJob?.join() }
-                finishInterruptedPendingTools(conversationId)
-                val currentConversation = session.state.value
-                val settings = settingsStore.settingsFlow.first()
+            try { runCatching { session.getJob()?.join() }; finishInterruptedPendingTools(conversationId)
+                val currentConversation = session.state.value; val settings = settingsStore.settingsFlow.first()
                 val assistant = settings.getAssistantById(currentConversation.assistantId) ?: settings.getCurrentAssistant()
                 val processedContent = preprocessUserInputParts(content, assistant)
-                val newConversation = currentConversation.copy(
-                    messageNodes = currentConversation.messageNodes + UIMessage(role = MessageRole.USER, parts = processedContent).toMessageNode(),
-                )
-                saveConversation(conversationId, newConversation)
+                saveConversation(conversationId, currentConversation.copy(messageNodes = currentConversation.messageNodes + UIMessage(role = MessageRole.USER, parts = processedContent).toMessageNode()))
                 if (answer) handleMessageComplete(conversationId)
                 _generationDoneFlow.emit(conversationId)
-            } catch (e: Exception) {
-                e.printStackTrace()
-                addError(e, conversationId, title = context.getString(R.string.error_title_send_message))
-            }
-        }
-        session.setJob(job)
+            } catch (e: Exception) { e.printStackTrace(); addError(e, conversationId, title = context.getString(R.string.error_title_send_message)) }
+        }; session.setJob(job)
     }
 
-    private fun preprocessUserInputParts(parts: List<UIMessagePart>, assistant: Assistant): List<UIMessagePart> {
-        return parts.map { part ->
-            when (part) {
-                is UIMessagePart.Text -> part.copy(
-                    text = part.text.replaceRegexes(assistant = assistant, scope = AssistantAffectScope.USER, mode = RegexApplyMode.OUTPUT)
-                )
-                else -> part
-            }
-        }
-    }
-
-    // ---- 重新生成 ----
+    private fun preprocessUserInputParts(parts: List<UIMessagePart>, assistant: Assistant) = parts.map { part -> when (part) { is UIMessagePart.Text -> part.copy(text = part.text.replaceRegexes(assistant = assistant, scope = AssistantAffectScope.USER, mode = RegexApplyMode.OUTPUT)); else -> part } }
 
     fun regenerateAtMessage(conversationId: Uuid, message: UIMessage, regenerateAssistantMsg: Boolean = true) {
-        val session = getOrCreateSession(conversationId)
-        session.getJob()?.cancel()
+        val session = getOrCreateSession(conversationId); session.getJob()?.cancel()
         val job = appScope.launch {
-            try {
-                val conversation = session.state.value
-                if (message.role == MessageRole.USER) {
-                    val node = conversation.getMessageNodeByMessage(message)
-                    val indexAt = conversation.messageNodes.indexOf(node)
-                    saveConversation(conversationId, conversation.copy(messageNodes = conversation.messageNodes.subList(0, indexAt + 1)))
-                    handleMessageComplete(conversationId)
-                } else {
-                    if (regenerateAssistantMsg) {
-                        val node = conversation.getMessageNodeByMessage(message)
-                        val nodeIndex = conversation.messageNodes.indexOf(node)
-                        handleMessageComplete(conversationId, messageRange = 0..<nodeIndex)
-                    } else saveConversation(conversationId, conversation)
-                }
+            try { val conversation = session.state.value
+                if (message.role == MessageRole.USER) { val node = conversation.getMessageNodeByMessage(message); saveConversation(conversationId, conversation.copy(messageNodes = conversation.messageNodes.subList(0, conversation.messageNodes.indexOf(node) + 1))); handleMessageComplete(conversationId) }
+                else { if (regenerateAssistantMsg) { val nodeIndex = conversation.messageNodes.indexOf(conversation.getMessageNodeByMessage(message)); handleMessageComplete(conversationId, messageRange = 0..<nodeIndex) } else saveConversation(conversationId, conversation) }
                 _generationDoneFlow.emit(conversationId)
             } catch (e: Exception) { addError(e, conversationId, title = context.getString(R.string.error_title_regenerate_message)) }
-        }
-        session.setJob(job)
+        }; session.setJob(job)
     }
-
-    // ---- 静默续写 ----
 
     fun continueMessage(conversationId: Uuid, continuePrompt: String) {
-        val session = getOrCreateSession(conversationId)
-        session.getJob()?.cancel()
+        val session = getOrCreateSession(conversationId); session.getJob()?.cancel()
         val job = appScope.launch {
-            try {
-                val conversation = session.state.value
-                val lastAssistantIdx = conversation.messageNodes.indexOfLast { it.currentMessage.role == MessageRole.ASSISTANT }
-                if (lastAssistantIdx == -1) return@launch
-                val settings = settingsStore.settingsFlow.first()
-                val assistant = settings.getAssistantById(conversation.assistantId) ?: settings.getCurrentAssistant()
+            try { val conversation = session.state.value; val lastAssistantIdx = conversation.messageNodes.indexOfLast { it.currentMessage.role == MessageRole.ASSISTANT }; if (lastAssistantIdx == -1) return@launch
+                val settings = settingsStore.settingsFlow.first(); val assistant = settings.getAssistantById(conversation.assistantId) ?: settings.getCurrentAssistant()
                 val model = settings.findModelById(assistant.chatModelId ?: settings.chatModelId) ?: return@launch
-                val contextMessages = conversation.currentMessages.subList(0, lastAssistantIdx + 1) +
-                    listOf(UIMessage(role = MessageRole.SYSTEM, parts = listOf(UIMessagePart.Text(text = continuePrompt))))
-                val originalConvMsg = conversation.currentMessages.getOrNull(lastAssistantIdx) ?: return@launch
-                val baseParts = originalConvMsg.parts
-                var accumulatedContinuation = ""
-                generationHandler.generateText(
-                    settings = settings, model = model, processingStatus = session.processingStatus,
-                    messages = contextMessages, assistant = assistant,
-                    conversationSystemPrompt = conversation.customSystemPrompt,
-                    conversationModeInjectionIds = conversation.modeInjectionIds,
-                    conversationLorebookIds = conversation.lorebookIds,
-                    workspaceCwd = conversation.workspaceCwd,
-                    memories = if (assistant.useGlobalMemory) memoryRepository.getGlobalMemories() else memoryRepository.getMemoriesOfAssistant(assistant.id.toString()),
-                    inputTransformers = buildList { addAll(inputTransformers); add(templateTransformer); add(workspaceReminderTransformer) },
-                    outputTransformers = outputTransformers, tools = emptyList(), maxSteps = 1,
-                ).collect { chunk ->
-                    when (chunk) {
-                        is GenerationChunk.Messages -> {
-                            val continuationMsg = chunk.messages.lastOrNull() ?: return@collect
-                            val currentText = continuationMsg.parts.filterIsInstance<UIMessagePart.Text>().joinToString("") { it.text }
-                            if (currentText.isEmpty() || currentText == accumulatedContinuation) return@collect
-                            accumulatedContinuation = currentText
-                            val currentConv = session.state.value
-                            val node = currentConv.messageNodes.getOrNull(lastAssistantIdx) ?: return@collect
-                            val mergedParts = baseParts + UIMessagePart.Text(text = currentText)
-                            val mergedMessage = node.currentMessage.copy(parts = mergedParts)
-                            val updatedConv = currentConv.copy(
-                                messageNodes = currentConv.messageNodes.toMutableList().apply {
-                                    set(lastAssistantIdx, node.copy(messages = listOf(mergedMessage), selectIndex = 0))
-                                }
-                            )
-                            session.state.value = updatedConv
-                            appEventBus.tryEmit(AppEvent.ChatGenerationUpdate(conversationId, mergedMessage, "..."))
-                        }
-                    }
-                }
-                saveConversation(conversationId, session.state.value)
-                _generationDoneFlow.emit(conversationId)
+                val contextMessages = conversation.currentMessages.subList(0, lastAssistantIdx + 1) + listOf(UIMessage(role = MessageRole.SYSTEM, parts = listOf(UIMessagePart.Text(text = continuePrompt))))
+                val baseParts = (conversation.currentMessages.getOrNull(lastAssistantIdx) ?: return@launch).parts; var accumulatedContinuation = ""
+                generationHandler.generateText(settings = settings, model = model, processingStatus = session.processingStatus, messages = contextMessages, assistant = assistant, conversationSystemPrompt = conversation.customSystemPrompt, conversationModeInjectionIds = conversation.modeInjectionIds, conversationLorebookIds = conversation.lorebookIds, workspaceCwd = conversation.workspaceCwd, memories = if (assistant.useGlobalMemory) memoryRepository.getGlobalMemories() else memoryRepository.getMemoriesOfAssistant(assistant.id.toString()), inputTransformers = buildList { addAll(inputTransformers); add(templateTransformer); add(workspaceReminderTransformer) }, outputTransformers = outputTransformers, tools = emptyList(), maxSteps = 1).collect { chunk ->
+                    when (chunk) { is GenerationChunk.Messages -> { val continuationMsg = chunk.messages.lastOrNull() ?: return@collect; val currentText = continuationMsg.parts.filterIsInstance<UIMessagePart.Text>().joinToString("") { it.text }; if (currentText.isEmpty() || currentText == accumulatedContinuation) return@collect; accumulatedContinuation = currentText; val currentConv = session.state.value; val node = currentConv.messageNodes.getOrNull(lastAssistantIdx) ?: return@collect; session.state.value = currentConv.copy(messageNodes = currentConv.messageNodes.toMutableList().apply { set(lastAssistantIdx, node.copy(messages = listOf(node.currentMessage.copy(parts = baseParts + UIMessagePart.Text(text = currentText))), selectIndex = 0)) }); appEventBus.tryEmit(AppEvent.ChatGenerationUpdate(conversationId, node.currentMessage.copy(parts = baseParts + UIMessagePart.Text(text = currentText)), "...")) } }
+                }; saveConversation(conversationId, session.state.value); _generationDoneFlow.emit(conversationId)
             } catch (e: Exception) { addError(e, conversationId, title = context.getString(R.string.error_title_generation)) }
-        }
-        session.setJob(job)
+        }; session.setJob(job)
     }
-
-    // ---- 工具审批 ----
 
     fun handleToolApproval(conversationId: Uuid, toolCallId: String, approved: Boolean, reason: String = "", answer: String? = null) {
-        val session = getOrCreateSession(conversationId)
-        session.getJob()?.cancel()
+        val session = getOrCreateSession(conversationId); session.getJob()?.cancel()
         val job = appScope.launch {
-            try {
-                val conversation = session.state.value
-                val newApprovalState = when { answer != null -> ToolApprovalState.Answered(answer); approved -> ToolApprovalState.Approved; else -> ToolApprovalState.Denied(reason) }
-                val updatedNodes = conversation.messageNodes.map { node ->
-                    node.copy(messages = node.messages.map { msg ->
-                        msg.copy(parts = msg.parts.map { part ->
-                            if (part is UIMessagePart.Tool && part.toolCallId == toolCallId) part.copy(approvalState = newApprovalState) else part
-                        })
-                    })
-                }
-                val updatedConversation = conversation.copy(messageNodes = updatedNodes)
-                saveConversation(conversationId, updatedConversation)
-                val hasPendingTools = updatedNodes.any { node -> node.currentMessage.parts.any { it is UIMessagePart.Tool && it.isPending } }
-                if (!hasPendingTools) handleMessageComplete(conversationId)
+            try { val conversation = session.state.value; val newApprovalState = when { answer != null -> ToolApprovalState.Answered(answer); approved -> ToolApprovalState.Approved; else -> ToolApprovalState.Denied(reason) }
+                val updatedNodes = conversation.messageNodes.map { node -> node.copy(messages = node.messages.map { msg -> msg.copy(parts = msg.parts.map { part -> if (part is UIMessagePart.Tool && part.toolCallId == toolCallId) part.copy(approvalState = newApprovalState) else part }) }) }
+                saveConversation(conversationId, conversation.copy(messageNodes = updatedNodes))
+                if (!updatedNodes.any { node -> node.currentMessage.parts.any { it is UIMessagePart.Tool && it.isPending } }) handleMessageComplete(conversationId)
                 _generationDoneFlow.emit(conversationId)
             } catch (e: Exception) { addError(e, conversationId, title = context.getString(R.string.error_title_tool_approval)) }
-        }
-        session.setJob(job)
+        }; session.setJob(job)
     }
 
-    // ---- 消息补全 ----
-
     private suspend fun handleMessageComplete(conversationId: Uuid, messageRange: ClosedRange<Int>? = null) {
-        val settings = settingsStore.settingsFlow.first()
-        val initialConversation = getConversationFlow(conversationId).value
+        val settings = settingsStore.settingsFlow.first(); val initialConversation = getConversationFlow(conversationId).value
         val assistant = settings.getAssistantById(initialConversation.assistantId) ?: settings.getCurrentAssistant()
         val model = settings.findModelById(assistant.chatModelId ?: settings.chatModelId) ?: return
         val senderName = if (assistant.useAssistantAvatar) assistant.name.ifEmpty { context.getString(R.string.assistant_page_default_assistant) } else model.displayName
-
         runCatching {
             updateConversation(conversationId, initialConversation.copy(chatSuggestions = emptyList()))
-            if (!model.abilities.contains(ModelAbility.TOOL)) {
-                if (assistant.enableWebSearch || mcpManager.getAllAvailableTools().isNotEmpty()) {
-                    addError(IllegalStateException(context.getString(R.string.tools_warning)), conversationId, title = context.getString(R.string.error_title_tool_unavailable))
-                }
-            }
-            checkInvalidMessages(conversationId)
-            val conversation = getConversationFlow(conversationId).value
-            val session = getOrCreateSession(conversationId)
-
-            // ---- 子代理工具：kimi-code spawn_subagent 替换旧 hire_agent/hire_team ----
-            val subagentTools = if (assistant.enableSubagents) {
-                buildSubagentTools(assistant, settings, conversation.workspaceCwd, depth = 0, assistant.subagentMaxDepth, includeBase = false, conversationId = conversationId)
-            } else emptyList()
-
-            generationHandler.generateText(
-                settings = settings, model = model, processingStatus = session.processingStatus,
+            if (!model.abilities.contains(ModelAbility.TOOL) && (assistant.enableWebSearch || mcpManager.getAllAvailableTools().isNotEmpty())) addError(IllegalStateException(context.getString(R.string.tools_warning)), conversationId, title = context.getString(R.string.error_title_tool_unavailable))
+            checkInvalidMessages(conversationId); val conversation = getConversationFlow(conversationId).value; val session = getOrCreateSession(conversationId)
+            val subagentTools = if (assistant.enableSubagents) buildSubagentTools(assistant, settings, conversation.workspaceCwd, depth = 0, assistant.subagentMaxDepth, includeBase = false, conversationId = conversationId) else emptyList()
+            generationHandler.generateText(settings = settings, model = model, processingStatus = session.processingStatus,
                 messages = conversation.currentMessages.let { if (messageRange != null) it.subList(messageRange.start, messageRange.endInclusive + 1) else it },
-                assistant = assistant,
-                conversationSystemPrompt = conversation.customSystemPrompt,
-                conversationModeInjectionIds = conversation.modeInjectionIds,
-                conversationLorebookIds = conversation.lorebookIds,
-                workspaceCwd = conversation.workspaceCwd,
+                assistant = assistant, conversationSystemPrompt = conversation.customSystemPrompt, conversationModeInjectionIds = conversation.modeInjectionIds, conversationLorebookIds = conversation.lorebookIds, workspaceCwd = conversation.workspaceCwd,
                 memories = if (assistant.useGlobalMemory) memoryRepository.getGlobalMemories() else memoryRepository.getMemoriesOfAssistant(assistant.id.toString()),
-                inputTransformers = buildList { addAll(inputTransformers); add(templateTransformer); add(workspaceReminderTransformer) },
-                outputTransformers = outputTransformers,
+                inputTransformers = buildList { addAll(inputTransformers); add(templateTransformer); add(workspaceReminderTransformer) }, outputTransformers = outputTransformers,
                 tools = buildList {
                     if (assistant.enableWebSearch) addAll(createSearchTools(settings))
                     addAll(localTools.getTools(assistant.localTools))
-                    // 保留旧子代理工具作为兼容（SubAgents 开关仍然有效），
-                    // 新 kimi-code 子代理系统通过 enableSubagents 开关独立控制
-                    if (assistant.localTools.contains(LocalToolOption.SubAgents)) {
-                        add(me.rerere.rikkahub.data.ai.tools.local.buildHireAgentTool(subAgentExecutor, assistant))
-                        add(me.rerere.rikkahub.data.ai.tools.local.buildHireTeamTool(subAgentExecutor, assistant))
-                    }
                     if (assistant.localTools.contains(LocalToolOption.Scheduler)) {
                         add(me.rerere.rikkahub.data.ai.tools.local.buildCreateScheduleTool(scheduledTaskRepository, assistant))
                         add(me.rerere.rikkahub.data.ai.tools.local.buildListSchedulesTool(scheduledTaskRepository, assistant))
@@ -486,418 +253,73 @@ class ChatService(
                     }
                     if (assistant.enableRecentChatsReference) addAll(createConversationTools(conversationRepo, assistant.id))
                     addAll(createWorkspaceToolsIfReady(assistant.workspaceId?.toString(), conversation.workspaceCwd))
-                    if (assistant.enabledSkills.isNotEmpty()) {
-                        addAll(createSkillTools(enabledSkills = assistant.enabledSkills, allSkills = skillManager.listSkills(), skillManager = skillManager))
-                    }
+                    if (assistant.enabledSkills.isNotEmpty()) addAll(createSkillTools(enabledSkills = assistant.enabledSkills, allSkills = skillManager.listSkills(), skillManager = skillManager))
                     mcpManager.getAllAvailableTools().also { allTools ->
                         val invalidNames = allTools.map { it.second }.distinct().filter { name -> name.isEmpty() || !name.all { it in 'a'..'z' || it in 'A'..'Z' || it in '0'..'9' } }
-                        if (invalidNames.isNotEmpty()) {
-                            addError(error = IllegalStateException(context.getString(R.string.error_mcp_invalid_server_name, invalidNames.joinToString(", "))), conversationId = conversationId)
-                            return
-                        }
-                    }.forEach { (serverId, serverName, tool) ->
-                        add(Tool(name = "mcp__${serverName}__${tool.name}", description = tool.description ?: "", parameters = { tool.inputSchema }, needsApproval = { tool.needsApproval }, execute = { mcpManager.callTool(serverId, tool.name, it.jsonObject) }))
-                    }
-                    // kimi-code 子代理委派工具
+                        if (invalidNames.isNotEmpty()) { addError(error = IllegalStateException(context.getString(R.string.error_mcp_invalid_server_name, invalidNames.joinToString(", "))), conversationId = conversationId); return }
+                    }.forEach { (serverId, serverName, tool) -> add(Tool(name = "mcp__${serverName}__${tool.name}", description = tool.description ?: "", parameters = { tool.inputSchema }, needsApproval = { tool.needsApproval }, execute = { mcpManager.callTool(serverId, tool.name, it.jsonObject) })) }
                     addAll(subagentTools)
-                },
+                }
             ).onCompletion {
-                val updatedConversation = getConversationFlow(conversationId).value.copy(
-                    messageNodes = getConversationFlow(conversationId).value.messageNodes.map { node -> node.copy(messages = node.messages.map { it.finishReasoning() }) },
-                    updateAt = Instant.now()
-                )
+                val updatedConversation = getConversationFlow(conversationId).value.copy(messageNodes = getConversationFlow(conversationId).value.messageNodes.map { node -> node.copy(messages = node.messages.map { it.finishReasoning() }) }, updateAt = Instant.now())
                 updateConversation(conversationId, updatedConversation)
                 appEventBus.emit(AppEvent.ChatGenerationEnded(conversationId = conversationId, senderName = senderName, contentPreview = updatedConversation.currentMessages.lastOrNull()?.toText()?.take(50)?.trim() ?: ""))
-            }.collect { chunk ->
-                when (chunk) {
-                    is GenerationChunk.Messages -> {
-                        val updatedConversation = getConversationFlow(conversationId).value.updateCurrentMessages(chunk.messages)
-                        updateConversation(conversationId, updatedConversation)
-                        chunk.messages.lastOrNull()?.let { lastMessage -> appEventBus.tryEmit(AppEvent.ChatGenerationUpdate(conversationId, lastMessage, senderName)) }
-                    }
-                }
-            }
-        }.onFailure {
-            appEventBus.tryEmit(AppEvent.ChatGenerationEnded(conversationId, senderName, null))
-            it.printStackTrace()
-            addError(it, conversationId, title = context.getString(R.string.error_title_generation))
-            Logging.log(TAG, "handleMessageComplete: $it")
-            Logging.log(TAG, it.stackTraceToString())
-        }.onSuccess {
-            val finalConversation = getConversationFlow(conversationId).value
-            saveConversation(conversationId, finalConversation)
-            launchWithConversationReference(conversationId) { generateTitle(conversationId, finalConversation) }
-            launchWithConversationReference(conversationId) { generateSuggestion(conversationId, finalConversation) }
-        }
+            }.collect { chunk -> when (chunk) { is GenerationChunk.Messages -> { val updatedConversation = getConversationFlow(conversationId).value.updateCurrentMessages(chunk.messages); updateConversation(conversationId, updatedConversation); chunk.messages.lastOrNull()?.let { appEventBus.tryEmit(AppEvent.ChatGenerationUpdate(conversationId, it, senderName)) } } } }
+        }.onFailure { appEventBus.tryEmit(AppEvent.ChatGenerationEnded(conversationId, senderName, null)); it.printStackTrace(); addError(it, conversationId, title = context.getString(R.string.error_title_generation)); Logging.log(TAG, "handleMessageComplete: $it") }.onSuccess { val finalConversation = getConversationFlow(conversationId).value; saveConversation(conversationId, finalConversation); launchWithConversationReference(conversationId) { generateTitle(conversationId, finalConversation) }; launchWithConversationReference(conversationId) { generateSuggestion(conversationId, finalConversation) } }
     }
 
-    // ========== 子代理系统 (kimi-code 移植) ==========
+    // ========== 子代理系统 (kimi-code) ==========
 
-    private suspend fun buildSubagentTools(
-        assistant: Assistant, settings: Settings, workspaceCwd: String?,
-        depth: Int, maxDepth: Int, includeBase: Boolean,
-        conversationId: Uuid? = null,
-    ): List<Tool> {
-        val profiles = mergeSubagentProfiles(assistant.subagentProfiles, assistant.disabledBuiltinSubagents)
-        val result = mutableListOf<Tool>()
-
-        if (includeBase) {
-            result += SubagentHost.sandboxToolsForSubagent(buildSubagentBaseTools(assistant, settings, workspaceCwd))
-        }
-
-        if (depth + 1 < maxDepth && profiles.isNotEmpty()) {
-            result += createSubagentTools(
-                profiles = profiles, json = json,
-                includeAskBtw = assistant.localTools.contains(LocalToolOption.AskBtw),
-                spawn = { profileName, task, _ ->
-                    val profile = profiles.firstOrNull { it.name == profileName }
-                    if (profile == null) SubagentResult(profileName = profileName, summary = "", succeeded = false, error = "Subagent profile not found: $profileName", depth = depth + 1)
-                    else {
-                        val parentModel = settings.findModelById(assistant.chatModelId ?: settings.chatModelId) ?: error("Model not found")
-                        subagentHost.spawn(
-                            profile = profile, task = task, settings = settings,
-                            parentAssistant = assistant, parentModel = parentModel,
-                            buildChildTools = { child, d -> buildSubagentTools(child, settings, workspaceCwd, d, maxDepth, includeBase = true) },
-                            depth = depth + 1, maxDepth = maxDepth,
-                            onProgress = if (conversationId != null) { subMessages -> updateSubagentProgress(conversationId, null, profileName, subMessages) } else null,
-                        )
-                    }
-                },
-                askBtw = { question ->
-                    val btwProfile = SubagentProfile(name = "btw", systemPrompt = assistant.systemPrompt, inheritTools = false, maxSteps = 1)
-                    val parentModel = settings.findModelById(assistant.chatModelId ?: settings.chatModelId) ?: return@createSubagentTools "(side agent failed: model not found)"
-                    val r = subagentHost.spawn(profile = btwProfile, task = question, settings = settings, parentAssistant = assistant, parentModel = parentModel, buildChildTools = { _, _ -> emptyList() }, depth = depth + 1, maxDepth = maxDepth)
-                    if (r.succeeded) r.summary else "(side agent failed: ${r.error})"
-                },
-            )
-        }
-
-        if (depth == 0) {
-            result += createManageSubagentTool(profiles = profiles, json = json, manage = { action, name, profile -> manageSubagentProfile(assistant.id, action, name, profile) })
-        }
-
+    private suspend fun buildSubagentTools(assistant: Assistant, settings: Settings, workspaceCwd: String?, depth: Int, maxDepth: Int, includeBase: Boolean, conversationId: Uuid? = null): List<Tool> {
+        val profiles = mergeSubagentProfiles(assistant.subagentProfiles, assistant.disabledBuiltinSubagents); val result = mutableListOf<Tool>()
+        if (includeBase) result += SubagentHost.sandboxToolsForSubagent(buildSubagentBaseTools(assistant, settings, workspaceCwd))
+        if (depth + 1 < maxDepth && profiles.isNotEmpty()) result += createSubagentTools(profiles = profiles, json = json, includeAskBtw = assistant.localTools.contains(LocalToolOption.AskBtw),
+            spawn = { profileName, task, _ -> val profile = profiles.firstOrNull { it.name == profileName }
+                if (profile == null) SubagentResult(profileName = profileName, summary = "", succeeded = false, error = "Subagent profile not found: $profileName", depth = depth + 1)
+                else { val parentModel = settings.findModelById(assistant.chatModelId ?: settings.chatModelId) ?: error("Model not found")
+                    subagentHost.spawn(profile = profile, task = task, settings = settings, parentAssistant = assistant, parentModel = parentModel, buildChildTools = { child, d -> buildSubagentTools(child, settings, workspaceCwd, d, maxDepth, includeBase = true) }, depth = depth + 1, maxDepth = maxDepth, onProgress = if (conversationId != null) { subMessages -> updateSubagentProgress(conversationId, null, profileName, subMessages) } else null) } },
+            askBtw = { question -> val btwProfile = SubagentProfile(name = "btw", systemPrompt = assistant.systemPrompt, inheritTools = false, maxSteps = 1); val parentModel = settings.findModelById(assistant.chatModelId ?: settings.chatModelId) ?: return@createSubagentTools "(side agent failed: model not found)"; val r = subagentHost.spawn(profile = btwProfile, task = question, settings = settings, parentAssistant = assistant, parentModel = parentModel, buildChildTools = { _, _ -> emptyList() }, depth = depth + 1, maxDepth = maxDepth); if (r.succeeded) r.summary else "(side agent failed: ${r.error})" })
+        if (depth == 0) result += createManageSubagentTool(profiles = profiles, json = json, manage = { action, name, profile -> manageSubagentProfile(assistant.id, action, name, profile) })
         return result
     }
 
-    private suspend fun buildSubagentBaseTools(assistant: Assistant, settings: Settings, workspaceCwd: String?): List<Tool> = buildList {
-        if (assistant.enableWebSearch) addAll(createSearchTools(settings))
-        addAll(SubagentHost.sandboxToolsForSubagent(localTools.getTools(assistant.localTools.filter { it != LocalToolOption.AskUser })))
-        addAll(createWorkspaceToolsIfReady(assistant.workspaceId?.toString(), workspaceCwd))
-        if (assistant.enabledSkills.isNotEmpty()) addAll(createSkillTools(enabledSkills = assistant.enabledSkills, allSkills = skillManager.listSkills(), skillManager = skillManager))
-    }
+    private suspend fun buildSubagentBaseTools(assistant: Assistant, settings: Settings, workspaceCwd: String?) = buildList { if (assistant.enableWebSearch) addAll(createSearchTools(settings)); addAll(SubagentHost.sandboxToolsForSubagent(localTools.getTools(assistant.localTools.filter { it != LocalToolOption.AskUser }))); addAll(createWorkspaceToolsIfReady(assistant.workspaceId?.toString(), workspaceCwd)); if (assistant.enabledSkills.isNotEmpty()) addAll(createSkillTools(enabledSkills = assistant.enabledSkills, allSkills = skillManager.listSkills(), skillManager = skillManager)) }
 
-    private suspend fun manageSubagentProfile(assistantId: Uuid, action: String, name: String, profile: SubagentProfile?): String {
-        val current = settingsStore.settingsFlow.first()
-        val target = current.assistants.firstOrNull { it.id == assistantId } ?: return "Error: assistant not found"
-        val merged = mergeSubagentProfiles(target.subagentProfiles, target.disabledBuiltinSubagents)
-        return when (action) {
-            "list" -> if (merged.isEmpty()) "No subagent profiles available." else "Available subagent profiles (${merged.size}):\n" + merged.joinToString("\n") { "- ${it.name}: ${it.description.ifBlank { "(no description)" }}" }
-            "create", "update" -> {
-                val p = profile ?: return "Error: profile data missing"
-                settingsStore.update { s -> s.copy(assistants = s.assistants.map { if (it.id == assistantId) it.copy(subagentProfiles = upsertSubagentProfile(it.subagentProfiles, p)) else it }) }
-                "$action: subagent profile '${p.name}' saved."
-            }
-            "delete" -> {
-                if (name.isBlank()) return "Error: name required for delete"
-                val isBuiltin = SubagentProfile.BUILTIN.any { it.name == name }
-                settingsStore.update { s -> s.copy(assistants = s.assistants.map { if (it.id == assistantId) it.copy(subagentProfiles = removeSubagentProfile(it.subagentProfiles, name), disabledBuiltinSubagents = if (isBuiltin) it.disabledBuiltinSubagents + name else it.disabledBuiltinSubagents) else it }) }
-                "delete: subagent profile '$name' removed." + if (isBuiltin) " (built-in profile disabled)" else ""
-            }
-            else -> "Error: unknown action '$action'"
-        }
-    }
+    private suspend fun manageSubagentProfile(assistantId: Uuid, action: String, name: String, profile: SubagentProfile?): String { val current = settingsStore.settingsFlow.first(); val target = current.assistants.firstOrNull { it.id == assistantId } ?: return "Error: assistant not found"; return when (action) { "list" -> (mergeSubagentProfiles(target.subagentProfiles, target.disabledBuiltinSubagents)).let { if (it.isEmpty()) "No subagent profiles available." else "Available subagent profiles (${it.size}):\n" + it.joinToString("\n") { "- ${it.name}: ${it.description.ifBlank { "(no description)" }}" } }; "create", "update" -> { val p = profile ?: return "Error: profile data missing"; settingsStore.update { s -> s.copy(assistants = s.assistants.map { if (it.id == assistantId) it.copy(subagentProfiles = upsertSubagentProfile(it.subagentProfiles, p)) else it }) }; "$action: subagent profile '${p.name}' saved." }; "delete" -> { if (name.isBlank()) return "Error: name required for delete"; val isBuiltin = SubagentProfile.BUILTIN.any { it.name == name }; settingsStore.update { s -> s.copy(assistants = s.assistants.map { if (it.id == assistantId) it.copy(subagentProfiles = removeSubagentProfile(it.subagentProfiles, name), disabledBuiltinSubagents = if (isBuiltin) it.disabledBuiltinSubagents + name else it.disabledBuiltinSubagents) else it }) }; "delete: subagent profile '$name' removed." + if (isBuiltin) " (built-in profile disabled)" else "" }; else -> "Error: unknown action '$action'" } }
 
-    private fun updateSubagentProgress(conversationId: Uuid, toolCallId: String?, profileName: String, subMessages: List<UIMessage>) {
-        runCatching {
-            val transcript = SubagentHost.buildTranscript(subMessages, truncateToolOutput = 2000)
-            if (transcript.isEmpty()) return@runCatching
-            val listSerializer = kotlinx.serialization.builtins.ListSerializer(SubagentTranscriptStep.serializer())
-            val transcriptMetadata = buildJsonObject {
-                put("subagent_transcript", json.encodeToJsonElement(listSerializer, transcript))
-                put("subagent_profile", JsonPrimitive(profileName))
-                put("subagent_steps", JsonPrimitive(transcript.size))
-                put("subagent_succeeded", JsonPrimitive(false))
-                put("subagent_streaming", JsonPrimitive(true))
-            }
-            val partialOutput = UIMessagePart.Text(text = "{\"profile_name\":\"$profileName\",\"succeeded\":false,\"streaming\":true}", metadata = transcriptMetadata)
-            updateConversationState(conversationId) { conversation ->
-                val messages = conversation.currentMessages
-                val lastAssistantIndex = messages.indexOfLast { it.role == MessageRole.ASSISTANT }
-                if (lastAssistantIndex < 0) return@updateConversationState conversation
-                val updatedMessages = messages.mapIndexed { index, message ->
-                    if (index != lastAssistantIndex) return@mapIndexed message
-                    val matchesTool: (UIMessagePart.Tool) -> Boolean = { part -> part.toolName == "spawn_subagent" && (!part.isExecuted || isStreamingSubagent(part)) && (toolCallId == null || part.toolCallId == toolCallId) }
-                    if (!message.parts.any { it is UIMessagePart.Tool && matchesTool(it) }) return@mapIndexed message
-                    message.copy(parts = message.parts.map { part -> if (part is UIMessagePart.Tool && matchesTool(part)) part.copy(output = listOf(partialOutput)) else part })
-                }
-                conversation.updateCurrentMessages(updatedMessages)
-            }
-        }.onFailure { Log.w(TAG, "updateSubagentProgress failed: ${it.message}") }
-    }
+    private fun updateSubagentProgress(conversationId: Uuid, toolCallId: String?, profileName: String, subMessages: List<UIMessage>) { runCatching { val transcript = SubagentHost.buildTranscript(subMessages, truncateToolOutput = 2000); if (transcript.isEmpty()) return@runCatching; val transcriptMetadata = buildJsonObject { put("subagent_transcript", json.encodeToJsonElement(kotlinx.serialization.builtins.ListSerializer(SubagentTranscriptStep.serializer()), transcript)); put("subagent_profile", JsonPrimitive(profileName)); put("subagent_steps", JsonPrimitive(transcript.size)); put("subagent_succeeded", JsonPrimitive(false)); put("subagent_streaming", JsonPrimitive(true)) }; updateConversationState(conversationId) { conversation -> val messages = conversation.currentMessages; val lastAssistantIndex = messages.indexOfLast { it.role == MessageRole.ASSISTANT }; if (lastAssistantIndex < 0) return@updateConversationState conversation; conversation.updateCurrentMessages(messages.mapIndexed { index, message -> if (index != lastAssistantIndex) return@mapIndexed message; val matchesTool: (UIMessagePart.Tool) -> Boolean = { part -> part.toolName == "spawn_subagent" && (!part.isExecuted || isStreamingSubagent(part)) && (toolCallId == null || part.toolCallId == toolCallId) }; if (!message.parts.any { it is UIMessagePart.Tool && matchesTool(it) }) return@mapIndexed message; message.copy(parts = message.parts.map { part -> if (part is UIMessagePart.Tool && matchesTool(part)) part.copy(output = listOf(UIMessagePart.Text(text = "{\"profile_name\":\"$profileName\",\"succeeded\":false,\"streaming\":true}", metadata = transcriptMetadata))) else part }) }) } }.onFailure { Log.w(TAG, "updateSubagentProgress failed: ${it.message}") } }
+    private fun isStreamingSubagent(part: UIMessagePart.Tool): Boolean = part.output.filterIsInstance<UIMessagePart.Text>().firstOrNull()?.metadata?.get("subagent_streaming")?.jsonPrimitive?.contentOrNull == "true"
 
-    private fun isStreamingSubagent(part: UIMessagePart.Tool): Boolean {
-        val textPart = part.output.filterIsInstance<UIMessagePart.Text>().firstOrNull()
-        return textPart?.metadata?.get("subagent_streaming")?.jsonPrimitive?.contentOrNull == "true"
-    }
+    private suspend fun createWorkspaceToolsIfReady(workspaceId: String?, cwd: String? = null) = if (workspaceId.isNullOrBlank()) emptyList() else workspaceRepository.getById(workspaceId)?.takeIf { it.shellStatus == WorkspaceShellStatus.READY.name }?.let { createWorkspaceTools(workspaceId = workspaceId, workspaceRepository = workspaceRepository, cwd = cwd, shellSessionManager = shellSessionManager, backgroundShellManager = backgroundShellManager, shellAuditLogger = shellAuditLogger) } ?: emptyList<Tool>().also { if (workspaceId != null) Log.d(TAG, "createWorkspaceToolsIfReady: skip, workspace=$workspaceId") }
 
-    // ========== 子代理系统结束 ==========
+    private fun checkInvalidMessages(conversationId: Uuid) { val conversation = getConversationFlow(conversationId).value; var nodes = conversation.messageNodes.mapIndexed { _, node -> val hasPending = node.currentMessage.getTools().any { !it.isExecuted }; if (hasPending) { val hasResumable = node.currentMessage.getTools().any { !it.isExecuted && it.approvalState.canResumeToolExecution() }; if (hasResumable) return@mapIndexed node; if (node.currentMessage.getTools().all { it.isExecuted } && node.currentMessage.getTools().isNotEmpty()) return@mapIndexed node; return@mapIndexed node.copy(messages = node.messages.filter { it.id != node.currentMessage.id }, selectIndex = node.selectIndex - 1) }; node }; nodes = nodes.map { if (it.messages.isNotEmpty() && it.selectIndex !in it.messages.indices) it.copy(selectIndex = 0) else it }; updateConversation(conversationId, conversation.copy(messageNodes = nodes.filter { it.messages.isNotEmpty() })) }
+    private fun cancelToolByUser(tool: UIMessagePart.Tool) = tool.copy(output = listOf(UIMessagePart.Text("""{"status":"cancelled","error":"Generation cancelled by user before tool execution completed."}""")), approvalState = ToolApprovalState.Denied("Generation cancelled by user"))
+    private suspend fun finishInterruptedPendingTools(conversationId: Uuid) { val currentConversation = getConversationFlow(conversationId).value; val lastNode = currentConversation.messageNodes.lastOrNull() ?: return; val lastMessage = lastNode.currentMessage; val updatedMessage = lastMessage.finishPendingTools(::cancelToolByUser); if (updatedMessage == lastMessage) return; saveConversation(conversationId, currentConversation.copy(messageNodes = currentConversation.messageNodes.dropLast(1) + lastNode.copy(messages = lastNode.messages.map { if (it.id == lastMessage.id) updatedMessage else it }))) }
 
-    private suspend fun createWorkspaceToolsIfReady(workspaceId: String?, cwd: String? = null): List<Tool> {
-        if (workspaceId.isNullOrBlank()) return emptyList()
-        val workspace = workspaceRepository.getById(workspaceId) ?: return emptyList()
-        if (workspace.shellStatus != WorkspaceShellStatus.READY.name) { Log.d(TAG, "createWorkspaceToolsIfReady: skip, status=${workspace.shellStatus}"); return emptyList() }
-        return createWorkspaceTools(workspaceId = workspaceId, workspaceRepository = workspaceRepository, cwd = cwd, shellSessionManager = shellSessionManager, backgroundShellManager = backgroundShellManager, shellAuditLogger = shellAuditLogger)
-    }
+    suspend fun generateTitle(conversationId: Uuid, conversation: Conversation, force: Boolean = false) { if (!force && conversation.title.isNotBlank()) return; runCatching { val settings = settingsStore.settingsFlow.first(); val model = settings.findModelById(settings.titleModelId, fallback = settings.fastModelId) ?: return; val provider = model.findProvider(settings.providers) ?: return; val result = providerManager.getProviderByType(provider).generateText(providerSetting = provider, messages = listOf(UIMessage.user(prompt = settings.titlePrompt.applyPlaceholders("locale" to Locale.getDefault().displayName, "content" to conversation.currentMessages.takeLast(4).joinToString("\n\n") { it.summaryAsText(maxLength = 500) }))), params = backgroundTextGenerationParams(model)); conversationRepo.getConversationById(conversation.id)?.let { saveConversation(conversationId, it.copy(title = result.choices[0].message?.toText()?.trim() ?: "")) } }.onFailure { it.printStackTrace(); addError(error = it, conversationId = conversationId, title = context.getString(R.string.error_title_generate_title), solution = ChatErrorSolution.CheckTitleModelSettings) } }
 
-    private fun checkInvalidMessages(conversationId: Uuid) {
-        val conversation = getConversationFlow(conversationId).value
-        var messagesNodes = conversation.messageNodes
-        messagesNodes = messagesNodes.mapIndexed { _, node ->
-            val hasPendingTools = node.currentMessage.getTools().any { !it.isExecuted }
-            if (hasPendingTools) {
-                val hasResumableTool = node.currentMessage.getTools().any { !it.isExecuted && it.approvalState.canResumeToolExecution() }
-                if (hasResumableTool) return@mapIndexed node
-                val allToolsExecuted = node.currentMessage.getTools().all { it.isExecuted }
-                if (allToolsExecuted && node.currentMessage.getTools().isNotEmpty()) return@mapIndexed node
-                return@mapIndexed node.copy(messages = node.messages.filter { it.id != node.currentMessage.id }, selectIndex = node.selectIndex - 1)
-            }
-            node
-        }
-        messagesNodes = messagesNodes.map { node -> if (node.messages.isNotEmpty() && node.selectIndex !in node.messages.indices) node.copy(selectIndex = 0) else node }
-        messagesNodes = messagesNodes.filter { it.messages.isNotEmpty() }
-        updateConversation(conversationId, conversation.copy(messageNodes = messagesNodes))
-    }
+    suspend fun generateSuggestion(conversationId: Uuid, conversation: Conversation) { runCatching { val settings = settingsStore.settingsFlow.first(); if (!settings.enableSuggestion) return; val model = settings.findModelById(settings.suggestionModelId, fallback = settings.fastModelId) ?: return; val provider = model.findProvider(settings.providers) ?: return; sessions[conversationId]?.let { updateConversation(conversationId, it.state.value.copy(chatSuggestions = emptyList())) }; val result = providerManager.getProviderByType(provider).generateText(providerSetting = provider, messages = listOf(UIMessage.user(settings.suggestionPrompt.applyPlaceholders("locale" to Locale.getDefault().displayName, "content" to conversation.currentMessages.takeLast(8).joinToString("\n\n") { it.summaryAsText(maxLength = 500) }))), params = backgroundTextGenerationParams(model)); saveConversation(conversationId, (conversationRepo.getConversationById(conversationId) ?: sessions[conversationId]?.state?.value ?: conversation).copy(chatSuggestions = result.choices[0].message?.toText()?.split("\n")?.map { it.trim() }?.filter { it.isNotBlank() }?.take(10) ?: emptyList())) }.onFailure { it.printStackTrace() } }
 
-    private fun cancelToolByUser(tool: UIMessagePart.Tool): UIMessagePart.Tool = tool.copy(
-        output = listOf(UIMessagePart.Text("""{"status":"cancelled","error":"Generation cancelled by user before tool execution completed."}""")),
-        approvalState = ToolApprovalState.Denied("Generation cancelled by user")
-    )
+    suspend fun compressConversation(conversationId: Uuid, conversation: Conversation, additionalPrompt: String, targetTokens: Int, keepRecentMessages: Int = 32) = runCatching { val settings = settingsStore.settingsFlow.first(); val model = settings.findModelById(settings.compressModelId) ?: settings.getCurrentChatModel() ?: throw IllegalStateException("No model available for compression"); val provider = model.findProvider(settings.providers) ?: throw IllegalStateException("Provider not found"); val allMessages = conversation.currentMessages; val (toCompress, toKeep) = if (keepRecentMessages > 0 && allMessages.size > keepRecentMessages) allMessages.dropLast(keepRecentMessages) to allMessages.takeLast(keepRecentMessages) else if (keepRecentMessages > 0) throw IllegalStateException(context.getString(R.string.chat_page_compress_not_enough_messages)) else allMessages to emptyList(); fun split(msgs: List<UIMessage>): List<List<UIMessage>> = if (msgs.size <= 256) listOf(msgs) else { val mid = msgs.size / 2; split(msgs.subList(0, mid)) + split(msgs.subList(mid, msgs.size)) }; suspend fun compress(msgs: List<UIMessage>) = providerManager.getProviderByType(provider).generateText(providerSetting = provider, messages = listOf(UIMessage.user(settings.compressPrompt.applyPlaceholders("content" to msgs.joinToString("\n\n") { it.summaryAsText(maxLength = 2000) }, "target_tokens" to targetTokens.toString(), "additional_context" to if (additionalPrompt.isNotBlank()) "Additional instructions from user: $additionalPrompt" else "", "locale" to Locale.getDefault().displayName))), params = backgroundTextGenerationParams(model)).choices[0].message?.toText()?.trim() ?: throw IllegalStateException("Failed to generate compressed summary"); saveConversation(conversationId, conversation.copy(messageNodes = buildList { coroutineScope { split(toCompress).map { async { compress(it) } }.awaitAll() }.forEach { add(UIMessage.user(it).toMessageNode()) }; addAll(toKeep.map { it.toMessageNode() }) }, chatSuggestions = emptyList())) }
 
-    private suspend fun finishInterruptedPendingTools(conversationId: Uuid) {
-        val currentConversation = getConversationFlow(conversationId).value
-        val lastNode = currentConversation.messageNodes.lastOrNull() ?: return
-        val lastMessage = lastNode.currentMessage
-        val updatedMessage = lastMessage.finishPendingTools(::cancelToolByUser)
-        if (updatedMessage == lastMessage) return
-        val updatedConversation = currentConversation.copy(
-            messageNodes = currentConversation.messageNodes.dropLast(1) + lastNode.copy(messages = lastNode.messages.map { if (it.id == lastMessage.id) updatedMessage else it })
-        )
-        saveConversation(conversationId, updatedConversation)
-    }
+    private fun updateConversation(conversationId: Uuid, conversation: Conversation) { if (conversation.id != conversationId) return; val session = getOrCreateSession(conversationId); checkFilesDelete(conversation, session.state.value); session.state.value = conversation }
+    fun updateConversationState(conversationId: Uuid, update: (Conversation) -> Conversation) { updateConversation(conversationId, update(getConversationFlow(conversationId).value)) }
+    suspend fun moveConversationToFolder(conversationId: Uuid, folderId: Uuid?) { if (sessions.containsKey(conversationId)) updateConversationState(conversationId) { it.copy(folderId = folderId) }; conversationRepo.updateConversationFolderId(conversationId, folderId) }
+    fun hasGeneratingConversationInFolder(folderId: Uuid) = sessions.values.any { it.isGenerating && it.state.value.folderId == folderId }
+    suspend fun deleteFolder(folderId: Uuid) { sessions.values.filter { it.state.value.folderId == folderId }.forEach { updateConversationState(it.id) { c -> c.copy(folderId = null) } }; folderRepository.deleteFolder(folderId) }
+    private fun checkFilesDelete(newConversation: Conversation, oldConversation: Conversation) { val deleted = oldConversation.files.filter { newConversation.files.none { f -> it == f } }; if (deleted.isNotEmpty()) { filesManager.deleteChatFiles(deleted); Log.w(TAG, "checkFilesDelete: $deleted") } }
+    suspend fun saveConversation(conversationId: Uuid, conversation: Conversation) { if (!conversationRepo.existsConversationById(conversation.id) && conversation.title.isBlank() && conversation.messageNodes.isEmpty()) return; val c = conversation.copy(); updateConversation(conversationId, c); if (!conversationRepo.existsConversationById(c.id)) conversationRepo.insertConversation(c) else conversationRepo.updateConversation(c) }
 
-    // ---- 生成标题 ----
+    fun translateMessage(conversationId: Uuid, message: UIMessage, targetLanguage: Locale) { appScope.launch(Dispatchers.IO) { try { val settings = settingsStore.settingsFlow.first(); val text = message.parts.filterIsInstance<UIMessagePart.Text>().joinToString("\n\n") { it.text }.trim(); if (text.isBlank()) return@launch; updateTranslationField(conversationId, message.id, context.getString(R.string.translating)); generationHandler.translateText(settings = settings, sourceText = text, targetLanguage = targetLanguage) { updateTranslationField(conversationId, message.id, it) }.collect {}; saveConversation(conversationId, getConversationFlow(conversationId).value) } catch (e: Exception) { clearTranslationField(conversationId, message.id); addError(e, conversationId, title = context.getString(R.string.error_title_translate_message)) } } }
+    private fun updateTranslationField(conversationId: Uuid, messageId: Uuid, translationText: String) { updateConversation(conversationId, getConversationFlow(conversationId).value.copy(messageNodes = getConversationFlow(conversationId).value.messageNodes.map { node -> if (node.messages.any { it.id == messageId }) node.copy(messages = node.messages.map { if (it.id == messageId) it.copy(translation = translationText) else it }) else node })) }
 
-    suspend fun generateTitle(conversationId: Uuid, conversation: Conversation, force: Boolean = false) {
-        val shouldGenerate = when { force -> true; conversation.title.isBlank() -> true; else -> false }
-        if (!shouldGenerate) return
-        runCatching {
-            val settings = settingsStore.settingsFlow.first()
-            val model = settings.findModelById(settings.titleModelId, fallback = settings.fastModelId) ?: return
-            val provider = model.findProvider(settings.providers) ?: return
-            val providerHandler = providerManager.getProviderByType(provider)
-            val result = providerHandler.generateText(
-                providerSetting = provider,
-                messages = listOf(UIMessage.user(prompt = settings.titlePrompt.applyPlaceholders("locale" to Locale.getDefault().displayName, "content" to conversation.currentMessages.takeLast(4).joinToString("\n\n") { it.summaryAsText(maxLength = 500) }))),
-                params = backgroundTextGenerationParams(model),
-            )
-            conversationRepo.getConversationById(conversation.id)?.let { saveConversation(conversationId, it.copy(title = result.choices[0].message?.toText()?.trim() ?: "")) }
-        }.onFailure {
-            it.printStackTrace()
-            addError(error = it, conversationId = conversationId, title = context.getString(R.string.error_title_generate_title), solution = ChatErrorSolution.CheckTitleModelSettings)
-        }
-    }
-
-    // ---- 生成建议 ----
-
-    suspend fun generateSuggestion(conversationId: Uuid, conversation: Conversation) {
-        runCatching {
-            val settings = settingsStore.settingsFlow.first()
-            if (!settings.enableSuggestion) return
-            val model = settings.findModelById(settings.suggestionModelId, fallback = settings.fastModelId) ?: return
-            val provider = model.findProvider(settings.providers) ?: return
-            sessions[conversationId]?.let { updateConversation(conversationId, it.state.value.copy(chatSuggestions = emptyList())) }
-            val providerHandler = providerManager.getProviderByType(provider)
-            val result = providerHandler.generateText(
-                providerSetting = provider,
-                messages = listOf(UIMessage.user(settings.suggestionPrompt.applyPlaceholders("locale" to Locale.getDefault().displayName, "content" to conversation.currentMessages.takeLast(8).joinToString("\n\n") { it.summaryAsText(maxLength = 500) }))),
-                params = backgroundTextGenerationParams(model),
-            )
-            val suggestions = result.choices[0].message?.toText()?.split("\n")?.map { it.trim() }?.filter { it.isNotBlank() } ?: emptyList()
-            val latestConversation = conversationRepo.getConversationById(conversationId) ?: sessions[conversationId]?.state?.value ?: conversation
-            saveConversation(conversationId, latestConversation.copy(chatSuggestions = suggestions.take(10)))
-        }.onFailure { it.printStackTrace() }
-    }
-
-    // ---- 压缩对话历史 ----
-
-    suspend fun compressConversation(conversationId: Uuid, conversation: Conversation, additionalPrompt: String, targetTokens: Int, keepRecentMessages: Int = 32): Result<Unit> = runCatching {
-        val settings = settingsStore.settingsFlow.first()
-        val model = settings.findModelById(settings.compressModelId) ?: settings.getCurrentChatModel() ?: throw IllegalStateException("No model available for compression")
-        val provider = model.findProvider(settings.providers) ?: throw IllegalStateException("Provider not found")
-        val providerHandler = providerManager.getProviderByType(provider)
-        val maxMessagesPerChunk = 256
-        val allMessages = conversation.currentMessages
-        val messagesToCompress: List<UIMessage>
-        val messagesToKeep: List<UIMessage>
-        if (keepRecentMessages > 0 && allMessages.size > keepRecentMessages) { messagesToCompress = allMessages.dropLast(keepRecentMessages); messagesToKeep = allMessages.takeLast(keepRecentMessages) }
-        else if (keepRecentMessages > 0) throw IllegalStateException(context.getString(R.string.chat_page_compress_not_enough_messages))
-        else { messagesToCompress = allMessages; messagesToKeep = emptyList() }
-        fun splitMessages(messages: List<UIMessage>): List<List<UIMessage>> {
-            if (messages.size <= maxMessagesPerChunk) return listOf(messages)
-            val mid = messages.size / 2
-            return splitMessages(messages.subList(0, mid)) + splitMessages(messages.subList(mid, messages.size))
-        }
-        suspend fun compressMessages(messages: List<UIMessage>): String {
-            val contentToCompress = messages.joinToString("\n\n") { it.summaryAsText(maxLength = 2000) }
-            val prompt = settings.compressPrompt.applyPlaceholders("content" to contentToCompress, "target_tokens" to targetTokens.toString(), "additional_context" to if (additionalPrompt.isNotBlank()) "Additional instructions from user: $additionalPrompt" else "", "locale" to Locale.getDefault().displayName)
-            val result = providerHandler.generateText(providerSetting = provider, messages = listOf(UIMessage.user(prompt)), params = backgroundTextGenerationParams(model))
-            return result.choices[0].message?.toText()?.trim() ?: throw IllegalStateException("Failed to generate compressed summary")
-        }
-        val compressedSummaries = coroutineScope { splitMessages(messagesToCompress).map { chunk -> async { compressMessages(chunk) } }.awaitAll() }
-        val newMessageNodes = buildList { compressedSummaries.forEach { add(UIMessage.user(it).toMessageNode()) }; addAll(messagesToKeep.map { it.toMessageNode() }) }
-        saveConversation(conversationId, conversation.copy(messageNodes = newMessageNodes, chatSuggestions = emptyList()))
-    }
-
-    // ---- 对话状态 ----
-
-    private fun updateConversation(conversationId: Uuid, conversation: Conversation) {
-        if (conversation.id != conversationId) return
-        val session = getOrCreateSession(conversationId)
-        checkFilesDelete(conversation, session.state.value)
-        session.state.value = conversation
-    }
-
-    fun updateConversationState(conversationId: Uuid, update: (Conversation) -> Conversation) {
-        val current = getConversationFlow(conversationId).value
-        updateConversation(conversationId, update(current))
-    }
-
-    suspend fun moveConversationToFolder(conversationId: Uuid, folderId: Uuid?) {
-        if (sessions.containsKey(conversationId)) updateConversationState(conversationId) { it.copy(folderId = folderId) }
-        conversationRepo.updateConversationFolderId(conversationId, folderId)
-    }
-
-    fun hasGeneratingConversationInFolder(folderId: Uuid): Boolean = sessions.values.any { it.isGenerating && it.state.value.folderId == folderId }
-
-    suspend fun deleteFolder(folderId: Uuid) {
-        sessions.values.filter { it.state.value.folderId == folderId }.forEach { updateConversationState(it.id) { c -> c.copy(folderId = null) } }
-        folderRepository.deleteFolder(folderId)
-    }
-
-    private fun checkFilesDelete(newConversation: Conversation, oldConversation: Conversation) {
-        val deletedFiles = oldConversation.files.filter { file -> newConversation.files.none { it == file } }
-        if (deletedFiles.isNotEmpty()) { filesManager.deleteChatFiles(deletedFiles); Log.w(TAG, "checkFilesDelete: $deletedFiles") }
-    }
-
-    suspend fun saveConversation(conversationId: Uuid, conversation: Conversation) {
-        val exists = conversationRepo.existsConversationById(conversation.id)
-        if (!exists && conversation.title.isBlank() && conversation.messageNodes.isEmpty()) return
-        val updatedConversation = conversation.copy()
-        updateConversation(conversationId, updatedConversation)
-        if (!exists) conversationRepo.insertConversation(updatedConversation) else conversationRepo.updateConversation(updatedConversation)
-    }
-
-    // ---- 翻译 ----
-
-    fun translateMessage(conversationId: Uuid, message: UIMessage, targetLanguage: Locale) {
-        appScope.launch(Dispatchers.IO) {
-            try {
-                val settings = settingsStore.settingsFlow.first()
-                val messageText = message.parts.filterIsInstance<UIMessagePart.Text>().joinToString("\n\n") { it.text }.trim()
-                if (messageText.isBlank()) return@launch
-                updateTranslationField(conversationId, message.id, context.getString(R.string.translating))
-                generationHandler.translateText(settings = settings, sourceText = messageText, targetLanguage = targetLanguage) { translatedText -> updateTranslationField(conversationId, message.id, translatedText) }.collect {}
-                saveConversation(conversationId, getConversationFlow(conversationId).value)
-            } catch (e: Exception) { clearTranslationField(conversationId, message.id); addError(e, conversationId, title = context.getString(R.string.error_title_translate_message)) }
-        }
-    }
-
-    private fun updateTranslationField(conversationId: Uuid, messageId: Uuid, translationText: String) {
-        val currentConversation = getConversationFlow(conversationId).value
-        val updatedNodes = currentConversation.messageNodes.map { node ->
-            if (node.messages.any { it.id == messageId }) node.copy(messages = node.messages.map { if (it.id == messageId) it.copy(translation = translationText) else it })
-            else node
-        }
-        updateConversation(conversationId, currentConversation.copy(messageNodes = updatedNodes))
-    }
-
-    // ---- 消息操作 ----
-
-    suspend fun editMessage(conversationId: Uuid, messageId: Uuid, parts: List<UIMessagePart>) {
-        if (parts.isEmptyInputMessage()) return
-        val currentConversation = getConversationFlow(conversationId).value
-        val settings = settingsStore.settingsFlow.first()
-        val assistant = settings.getAssistantById(currentConversation.assistantId) ?: settings.getCurrentAssistant()
-        val processedParts = preprocessUserInputParts(parts, assistant)
-        var edited = false
-        val updatedNodes = currentConversation.messageNodes.map { node ->
-            if (!node.messages.any { it.id == messageId }) return@map node
-            edited = true
-            node.copy(messages = node.messages + UIMessage(role = node.role, parts = processedParts), selectIndex = node.messages.size)
-        }
-        if (!edited) return
-        saveConversation(conversationId, currentConversation.copy(messageNodes = updatedNodes))
-    }
-
-    suspend fun forkConversationAtMessage(conversationId: Uuid, messageId: Uuid): Conversation {
-        val currentConversation = getConversationFlow(conversationId).value
-        val targetNodeIndex = currentConversation.messageNodes.indexOfFirst { it.messages.any { it.id == messageId } }
-        if (targetNodeIndex == -1) throw NotFoundException("Message not found")
-        val copiedNodes = currentConversation.messageNodes.subList(0, targetNodeIndex + 1).map { node ->
-            node.copy(id = Uuid.random(), messages = node.messages.map { it.copy(parts = it.parts.map { part -> part.copyWithForkedFileUrl() }) })
-        }
-        val forkConversation = Conversation(id = Uuid.random(), assistantId = currentConversation.assistantId, messageNodes = copiedNodes, customSystemPrompt = currentConversation.customSystemPrompt, modeInjectionIds = currentConversation.modeInjectionIds, lorebookIds = currentConversation.lorebookIds)
-        saveConversation(forkConversation.id, forkConversation)
-        return forkConversation
-    }
-
-    suspend fun selectMessageNode(conversationId: Uuid, nodeId: Uuid, selectIndex: Int) {
-        val currentConversation = getConversationFlow(conversationId).value
-        val targetNode = currentConversation.messageNodes.firstOrNull { it.id == nodeId } ?: throw NotFoundException("Message node not found")
-        if (selectIndex !in targetNode.messages.indices) throw BadRequestException("Invalid selectIndex")
-        if (targetNode.selectIndex == selectIndex) return
-        saveConversation(conversationId, currentConversation.copy(messageNodes = currentConversation.messageNodes.map { if (it.id == nodeId) it.copy(selectIndex = selectIndex) else it }))
-    }
-
-    suspend fun deleteMessage(conversationId: Uuid, messageId: Uuid, failIfMissing: Boolean = true) {
-        val currentConversation = getConversationFlow(conversationId).value
-        val updatedConversation = buildConversationAfterMessageDelete(currentConversation, messageId)
-        if (updatedConversation == null) { if (failIfMissing) throw NotFoundException("Message not found"); return }
-        saveConversation(conversationId, updatedConversation)
-    }
-
+    suspend fun editMessage(conversationId: Uuid, messageId: Uuid, parts: List<UIMessagePart>) { if (parts.isEmptyInputMessage()) return; val currentConversation = getConversationFlow(conversationId).value; val assistant = (settingsStore.settingsFlow.first().getAssistantById(currentConversation.assistantId) ?: settingsStore.settingsFlow.first().getCurrentAssistant()); var edited = false; val updatedNodes = currentConversation.messageNodes.map { node -> if (!node.messages.any { it.id == messageId }) return@map node; edited = true; node.copy(messages = node.messages + UIMessage(role = node.role, parts = preprocessUserInputParts(parts, assistant)), selectIndex = node.messages.size) }; if (!edited) return; saveConversation(conversationId, currentConversation.copy(messageNodes = updatedNodes)) }
+    suspend fun forkConversationAtMessage(conversationId: Uuid, messageId: Uuid): Conversation { val currentConversation = getConversationFlow(conversationId).value; val idx = currentConversation.messageNodes.indexOfFirst { it.messages.any { m -> m.id == messageId } }; if (idx == -1) throw NotFoundException("Message not found"); val forkConversation = Conversation(id = Uuid.random(), assistantId = currentConversation.assistantId, messageNodes = currentConversation.messageNodes.subList(0, idx + 1).map { node -> node.copy(id = Uuid.random(), messages = node.messages.map { it.copy(parts = it.parts.map { part -> part.copyWithForkedFileUrl() }) }) }, customSystemPrompt = currentConversation.customSystemPrompt, modeInjectionIds = currentConversation.modeInjectionIds, lorebookIds = currentConversation.lorebookIds); saveConversation(forkConversation.id, forkConversation); return forkConversation }
+    suspend fun selectMessageNode(conversationId: Uuid, nodeId: Uuid, selectIndex: Int) { val current = getConversationFlow(conversationId).value; val node = current.messageNodes.firstOrNull { it.id == nodeId } ?: throw NotFoundException("Message node not found"); if (selectIndex !in node.messages.indices) throw BadRequestException("Invalid selectIndex"); if (node.selectIndex == selectIndex) return; saveConversation(conversationId, current.copy(messageNodes = current.messageNodes.map { if (it.id == nodeId) it.copy(selectIndex = selectIndex) else it })) }
+    suspend fun deleteMessage(conversationId: Uuid, messageId: Uuid, failIfMissing: Boolean = true) { val current = getConversationFlow(conversationId).value; val updated = buildConversationAfterMessageDelete(current, messageId) ?: if (failIfMissing) throw NotFoundException("Message not found") else return; saveConversation(conversationId, updated) }
     suspend fun deleteMessage(conversationId: Uuid, message: UIMessage) { deleteMessage(conversationId, message.id, failIfMissing = false) }
-
-    private fun buildConversationAfterMessageDelete(conversation: Conversation, messageId: Uuid): Conversation? {
-        val targetNodeIndex = conversation.messageNodes.indexOfFirst { it.messages.any { it.id == messageId } }
-        if (targetNodeIndex == -1) return null
-        val updatedNodes = conversation.messageNodes.mapIndexedNotNull { index, node ->
-            if (index != targetNodeIndex) return@mapIndexedNotNull node
-            val nextMessages = node.messages.filterNot { it.id == messageId }
-            if (nextMessages.isEmpty()) return@mapIndexedNotNull null
-            node.copy(messages = nextMessages, selectIndex = node.selectIndex.coerceAtMost(nextMessages.lastIndex))
-        }
-        return conversation.copy(messageNodes = updatedNodes)
-    }
-
-    private fun UIMessagePart.copyWithForkedFileUrl(): UIMessagePart {
-        fun copyLocalFileIfNeeded(url: String): String { if (!url.startsWith("file:")) return url; val copied = filesManager.createChatFilesByContents(listOf(url.toUri())).firstOrNull(); return copied?.toString() ?: url }
-        return when (this) { is UIMessagePart.Image -> copy(url = copyLocalFileIfNeeded(url)); is UIMessagePart.Document -> copy(url = copyLocalFileIfNeeded(url)); is UIMessagePart.Video -> copy(url = copyLocalFileIfNeeded(url)); is UIMessagePart.Audio -> copy(url = copyLocalFileIfNeeded(url)); else -> this }
-    }
-
-    fun clearTranslationField(conversationId: Uuid, messageId: Uuid) {
-        val currentConversation = getConversationFlow(conversationId).value
-        val updatedNodes = currentConversation.messageNodes.map { node ->
-            if (node.messages.any { it.id == messageId }) node.copy(messages = node.messages.map { if (it.id == messageId) it.copy(translation = null) else it })
-            else node
-        }
-        updateConversation(conversationId, currentConversation.copy(messageNodes = updatedNodes))
-    }
-
-    suspend fun stopGeneration(conversationId: Uuid) {
-        val job = sessions[conversationId]?.getJob() ?: return
-        job.cancel()
-        runCatching { job.join() }
-        finishInterruptedPendingTools(conversationId)
-    }
+    private fun buildConversationAfterMessageDelete(conversation: Conversation, messageId: Uuid) = conversation.messageNodes.indexOfFirst { it.messages.any { m -> m.id == messageId } }.takeIf { it != -1 }?.let { idx -> conversation.copy(messageNodes = conversation.messageNodes.mapIndexedNotNull { i, node -> if (i != idx) node else node.messages.filterNot { it.id == messageId }.takeIf { it.isNotEmpty() }?.let { node.copy(messages = it, selectIndex = node.selectIndex.coerceAtMost(it.lastIndex)) } }) }
+    private fun UIMessagePart.copyWithForkedFileUrl() = when (this) { is UIMessagePart.Image -> copy(url = copyLocalFileIfNeeded(url)); is UIMessagePart.Document -> copy(url = copyLocalFileIfNeeded(url)); is UIMessagePart.Video -> copy(url = copyLocalFileIfNeeded(url)); is UIMessagePart.Audio -> copy(url = copyLocalFileIfNeeded(url)); else -> this }; private fun copyLocalFileIfNeeded(url: String) = if (!url.startsWith("file:")) url else filesManager.createChatFilesByContents(listOf(url.toUri())).firstOrNull()?.toString() ?: url
+    fun clearTranslationField(conversationId: Uuid, messageId: Uuid) { updateConversation(conversationId, getConversationFlow(conversationId).value.copy(messageNodes = getConversationFlow(conversationId).value.messageNodes.map { node -> if (node.messages.any { it.id == messageId }) node.copy(messages = node.messages.map { if (it.id == messageId) it.copy(translation = null) else it }) else node })) }
+    suspend fun stopGeneration(conversationId: Uuid) { sessions[conversationId]?.getJob()?.let { it.cancel(); runCatching { it.join() }; finishInterruptedPendingTools(conversationId) } }
 }
