@@ -426,6 +426,12 @@ object ShellSafety {
     /** 本应用包名前缀 — 允许读写 */
     private const val APP_PACKAGE = "me.rerere.rikkahub"
 
+    /** 无害设备节点白名单 — 重定向写入这些节点永远安全 */
+    private val HARMLESS_DEV_NODES = setOf(
+        "/dev/null", "/dev/zero", "/dev/urandom", "/dev/random",
+        "/dev/stdin", "/dev/stdout", "/dev/stderr", "/dev/tty",
+    )
+
     /** 敏感系统路径(写操作需要拦截) */
     private val SENSITIVE_PATHS = listOf(
         "/system",
@@ -455,6 +461,8 @@ object ShellSafety {
             if (path.startsWith("/data/data/$APP_PACKAGE")) continue
             if (path.startsWith("/storage/emulated")) continue
             if (path.startsWith("/tmp")) continue
+            // 允许无害设备节点 (/dev/null, /dev/zero 等) — 重定向到它们是标准安全操作
+            if (path in HARMLESS_DEV_NODES || path.startsWith("/dev/fd")) continue
 
             // 检查是否命中敏感路径
             for (sensitive in SENSITIVE_PATHS) {
