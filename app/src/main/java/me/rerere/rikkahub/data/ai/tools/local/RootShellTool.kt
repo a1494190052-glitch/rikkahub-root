@@ -79,7 +79,7 @@ internal fun buildRootShellTool(
                 approvalOverride() ?: run {
                     val command = json.jsonObject["command"]?.jsonPrimitive?.contentOrNull.orEmpty()
                     // 使用深度分类: 静态 + 动态管道/编码绕过检测
-                    ShellSafety.deepClassify(command).risk == ShellRisk.WRITE
+                    ShellSafety.deepClassify(command, strict = false).risk == ShellRisk.WRITE
                 }
             }
         },
@@ -94,7 +94,7 @@ internal fun buildRootShellTool(
                 ?: ROOT_SHELL_DEFAULT_TIMEOUT_MS
 
             // 安全闸门: 深度分类 — 高危命令直接拒绝
-            val classification = ShellSafety.deepClassify(command)
+            val classification = ShellSafety.deepClassify(command, strict = false)
             if (classification.risk == ShellRisk.BLOCKED) {
                 val reason = classification.reason ?: "blocked by safety guard"
                 val offending = classification.offendingSegment
