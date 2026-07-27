@@ -25,6 +25,14 @@ data class SubagentProfile(
     val mcpServerIds: Set<Uuid> = emptySet(),
     val excludedTools: Set<String> = emptySet(),
     val extraLocalTools: List<LocalToolOption> = emptyList(),
+    /**
+     * 显式放权: true = 子代理可自动执行 root shell 写命令(无需审批);
+     * false(默认) = 子代理只能跑只读宿主命令, 写操作被拒绝并回报父代理.
+     * 高危开关, 只对充分信任的 profile 开启.
+     */
+    val allowHostShellWrite: Boolean = false,
+    /** 子代理单次 spawn 的总时长上限(秒), 超时按失败返回, 防止失控烧 token */
+    val timeoutSeconds: Int = DEFAULT_TIMEOUT_SECONDS,
     val enableMemory: Boolean = false,
     val summaryMinLength: Int = DEFAULT_SUMMARY_MIN_LENGTH,
     val summaryContinuationAttempts: Int = DEFAULT_SUMMARY_CONTINUATION_ATTEMPTS,
@@ -43,6 +51,7 @@ data class SubagentProfile(
         val FULLY_READONLY_EXCLUDED_TOOLS: Set<String> = FILE_MUTATING_TOOLS + "workspace_shell" + HOST_SHELL_TOOLS
         const val DEFAULT_SUMMARY_MIN_LENGTH = 0
         const val DEFAULT_SUMMARY_CONTINUATION_ATTEMPTS = 0
+        const val DEFAULT_TIMEOUT_SECONDS = 600
 
         val BUILTIN: List<SubagentProfile> = listOf(
             SubagentProfile(

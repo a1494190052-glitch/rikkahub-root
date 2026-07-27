@@ -9,6 +9,7 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.fold
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
@@ -68,7 +69,9 @@ class SubagentHost(
         var totalUsage: TokenUsage? = null
         var steps = 0
 
-        return runCatching {
+        // 总时长保护: 超时按失败返回(用户主动取消仍会作为 CancellationException 向上传播)
+        val timedResult = withTimeoutOrNull(profile.timeoutSeconds.coerceAtLeast(1) * 1000L) {
+            runCatching {
             Log.i(TAG, "spawn: subagent '${profile.name}' (depth=$depth) started")
             var messages = listOf(UIMessage.user(task))
             var run = runToCompletion(profile, settings, childModel, childAssistant, childTools, messages, onProgress)
@@ -99,11 +102,16 @@ class SubagentHost(
             )
             logResult(result)
             result
-        }.onFailure {
-            if (it is CancellationException) throw it
-            Log.e(TAG, "spawn: subagent '${profile.name}' failed: ${it.message}", it)
-        }.getOrElse {
-            SubagentResult(profileName = profile.name, summary = "", succeeded = false, error = it.message ?: it.javaClass.name, depth = depth, usage = totalUsage, steps = steps)
+            }.onFailure {
+                if (it is CancellationException) throw it
+                Log.e(TAG, "spawn: subagent '${profile.name}' failed: ${it.message}", it)
+            }.getOrElse {
+                SubagentResult(profileName = profile.name, summary = "", succeeded = false, error = it.message ?: it.javaClass.name, depth = depth, usage = totalUsage, steps = steps)
+            }
+        }
+        return timedResult ?: run {
+            Log.w(TAG, "spawn: subagent '${profile.name}' (depth=$depth) timed out after ${profile.timeoutSeconds}s")
+            SubagentResult(profileName = profile.name, summary = "", succeeded = false, error = "subagent timed out after ${profile.timeoutSeconds}s", depth = depth, usage = totalUsage, steps = steps)
         }
     }
 
@@ -231,9 +239,9 @@ class SubagentHost(
          *    ShellSafety 判定为 WRITE/BLOCKED 的命令直接拒绝, 让子代理把写操作交还父代理.
          *    只读命令照常放行, 不影响探索类子代理工作.
          */
-        fun sandboxToolsForSubagent(tools: List<Tool>): List<Tool> = tools.map { tool ->
+        fun sandboxToolsForSubagent(tools: List<Tool>, allowHostShellWrite: Boolean = false): List<Tool> = tools.map { tool ->
             val sandboxed = tool.copy(needsApproval = NO_APPROVAL)
-            if (tool.name in HOST_SHELL_WRITE_GUARDED_TOOLS) {
+            if (!allowHostShellWrite && tool.name in HOST_SHELL_WRITE_GUARDED_TOOLS) {
                 sandboxed.copy(execute = guardHostShellExecution(tool.name, sandboxed.execute))
             } else {
                 sandboxed

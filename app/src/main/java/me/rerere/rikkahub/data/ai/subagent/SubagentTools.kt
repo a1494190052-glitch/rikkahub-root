@@ -179,6 +179,14 @@ fun createManageSubagentTool(
                 put("temperature", buildJsonObject { put("type", "number") })
                 put("top_p", buildJsonObject { put("type", "number") })
                 put("max_tokens", buildJsonObject { put("type", "integer") })
+                put("allow_host_shell_write", buildJsonObject {
+                    put("type", "boolean")
+                    put("description", "DANGEROUS: true lets this subagent run root shell WRITE commands without approval. Default false (read-only host shell only).")
+                })
+                put("timeout_seconds", buildJsonObject {
+                    put("type", "integer")
+                    put("description", "Max wall-clock seconds per spawn before the subagent is failed as timed out. Default 600.")
+                })
             },
             required = listOf("action"),
         )
@@ -226,5 +234,7 @@ private fun SubagentProfile.applyPatch(params: JsonObject): SubagentProfile {
         streamOutput = bool("stream_output") ?: streamOutput,
         enableMemory = bool("enable_memory") ?: enableMemory,
         excludedTools = optStrSet("excluded_tools") ?: excludedTools,
+        allowHostShellWrite = bool("allow_host_shell_write") ?: allowHostShellWrite,
+        timeoutSeconds = int("timeout_seconds") ?: timeoutSeconds,
     )
 }
