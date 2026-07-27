@@ -211,6 +211,8 @@ dependencies {
     implementation(libs.slf4j.api)
     implementation(libs.slf4j.android)
     implementation(libs.sqlite.android)
+    // ONNX Runtime — 本地 Embedding 推理引擎
+    implementation(libs.onnxruntime.android)
     implementation(project(":ai"))
     implementation(project(":web"))
     implementation(project(":document"))

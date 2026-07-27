@@ -95,6 +95,7 @@ class SemanticMemoryManager(
             }
         }
 
+        val queryDim = queryEmbedding.size
         val memoriesWithEmbedding = memoryDAO.getMemoriesWithEmbedding(assistantId)
         if (memoriesWithEmbedding.isEmpty()) {
             return emptyList()
@@ -104,6 +105,10 @@ class SemanticMemoryManager(
             .mapNotNull { memory ->
                 val memEmbedding = memory.embedding?.let { VectorUtils.byteArrayToFloatArray(it) }
                     ?: return@mapNotNull null
+                // 维度兼容：跳过维度不匹配的向量（本地 384 vs 远程 1536）
+                if (memEmbedding.size != queryDim) {
+                    return@mapNotNull null
+                }
                 val score = VectorUtils.cosineSimilarity(queryEmbedding, memEmbedding)
                 SemanticSearchResult(memory = memory, score = score)
             }
@@ -137,6 +142,7 @@ class SemanticMemoryManager(
             }
         }
 
+        val contextDim = contextEmbedding.size
         val memoriesWithEmbedding = memoryDAO.getMemoriesWithEmbedding(assistantId)
         if (memoriesWithEmbedding.isEmpty()) {
             return emptyList()
@@ -146,6 +152,10 @@ class SemanticMemoryManager(
             .mapNotNull { memory ->
                 val memEmbedding = memory.embedding?.let { VectorUtils.byteArrayToFloatArray(it) }
                     ?: return@mapNotNull null
+                // 维度兼容：跳过维度不匹配的向量
+                if (memEmbedding.size != contextDim) {
+                    return@mapNotNull null
+                }
                 val semanticScore = VectorUtils.cosineSimilarity(contextEmbedding, memEmbedding)
                 // 综合分数：语义相似度 * 0.7 + 重要性归一化 * 0.2 + 新鲜度 * 0.1
                 val importanceScore = memory.importance / 5.0f
@@ -184,6 +194,9 @@ class SemanticMemoryManager(
                 if (memories[j].id in toDelete) continue
                 val embeddingJ = memories[j].embedding?.let { VectorUtils.byteArrayToFloatArray(it) }
                     ?: continue
+
+                // 维度兼容：只比较同维度向量
+                if (embeddingI.size != embeddingJ.size) continue
 
                 val similarity = VectorUtils.cosineSimilarity(embeddingI, embeddingJ)
                 if (similarity >= CONSOLIDATION_SIMILARITY_THRESHOLD) {
@@ -248,6 +261,46 @@ class SemanticMemoryManager(
         }
 
         Log.i(TAG, "Backfilled $count embeddings for assistant=$assistantId")
+        return count
+    }
+
+    /**
+     * 使用当前活跃后端重新嵌入所有记忆（维度迁移）
+     * 当从远程切换到本地（或反之）时，需要统一向量维度
+     * @return 成功重新嵌入的数量
+     */
+    suspend fun reEmbedAll(assistantId: String): Int {
+        val memories = memoryDAO.getMemoriesOfAssistant(assistantId)
+        val withContent = memories.filter { it.content.isNotBlank() }
+        if (withContent.isEmpty()) return 0
+
+        val targetDim = embeddingService.activeDimension
+        var count = 0
+
+        // 分批处理，每批 20 条
+        withContent.chunked(20).forEach { batch ->
+            val texts = batch.map { it.content }
+            val embeddings = embeddingService.embedBatch(texts)
+
+            batch.forEachIndexed { index, memory ->
+                val embedding = embeddings.getOrNull(index) ?: return@forEachIndexed
+                // 只更新维度不同的
+                val existingDim = memory.embedding?.let {
+                    VectorUtils.byteArrayToFloatArray(it).size
+                } ?: 0
+                if (existingDim != targetDim || memory.embedding == null) {
+                    memoryDAO.updateMemory(
+                        memory.copy(
+                            embedding = VectorUtils.floatArrayToByteArray(embedding),
+                            updatedAt = System.currentTimeMillis(),
+                        )
+                    )
+                    count++
+                }
+            }
+        }
+
+        Log.i(TAG, "Re-embedded $count memories to dim=$targetDim for assistant=$assistantId")
         return count
     }
 }
