@@ -26,6 +26,7 @@ class PluginManager(
     private val context: Context,
     private val json: Json,
     private val scope: CoroutineScope,
+    private val errorReporter: ErrorReporter? = null,
 ) {
     companion object {
         private const val TAG = "PluginManager"
@@ -55,6 +56,7 @@ class PluginManager(
                 scanAndLoad()
             } catch (e: Exception) {
                 Log.e(TAG, "Error during plugin initialization", e)
+                errorReporter?.report(e, "插件系统初始化失败")
             } finally {
                 _initialized.complete(Unit)
             }
@@ -137,6 +139,7 @@ class PluginManager(
                         loader.loadPlugin(dir, manifest, config)
                     } catch (e: Exception) {
                         Log.e(TAG, "Failed to load plugin on enable: $pluginId", e)
+                        errorReporter?.report(e, "启用插件失败: $pluginId")
                     }
                 }
             } else {
@@ -198,6 +201,7 @@ class PluginManager(
                         loader.loadPlugin(dir, manifest, config)
                     } catch (e: Exception) {
                         Log.e(TAG, "Failed to reload plugin after config update: $pluginId", e)
+                        errorReporter?.report(e, "重载插件配置失败: $pluginId")
                     }
                 }
             }
