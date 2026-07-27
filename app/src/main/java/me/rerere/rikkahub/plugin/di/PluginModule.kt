@@ -16,6 +16,11 @@ val pluginModule = module {
             context = androidContext(),
             json = get(),
             scope = get(),
+            // 懒加载桥接到 ChatService.addError：get() 在 lambda 调用时才解析 ChatService，
+            // 避免 PluginManager → ChatService → LocalTools → PluginManager 的构造期循环依赖。
+            errorReporter = { error, title ->
+                runCatching { get<me.rerere.rikkahub.service.ChatService>().addError(error, title = title) }
+            },
         )
     }
 
