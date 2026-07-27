@@ -146,6 +146,9 @@ class SettingsStore(
         // 备份提醒
         val BACKUP_REMINDER_CONFIG = stringPreferencesKey("backup_reminder_config")
 
+        // 工具审批覆盖
+        val TOOL_APPROVAL_OVERRIDES = stringPreferencesKey("tool_approval_overrides")
+
         // 统计
         val LAUNCH_COUNT = intPreferencesKey("launch_count")
 
@@ -233,6 +236,9 @@ class SettingsStore(
                 quickMessages = preferences[QUICK_MESSAGES]?.let {
                     JsonInstant.decodeFromString(it)
                 } ?: emptyList(),
+                toolApprovalOverrides = preferences[TOOL_APPROVAL_OVERRIDES]?.let {
+                    runCatching { JsonInstant.decodeFromString<Map<String, Boolean>>(it) }.getOrDefault(emptyMap())
+                } ?: emptyMap(),
                 webServerEnabled = preferences[WEB_SERVER_ENABLED] == true,
                 workspaceRootMode = preferences[WORKSPACE_ROOT_MODE] == true,
                 floatingTaskWindowEnabled = preferences[FLOATING_TASK_WINDOW] == true,
@@ -404,6 +410,7 @@ class SettingsStore(
             preferences[MODE_INJECTIONS] = JsonInstant.encodeToString(settings.modeInjections)
             preferences[LOREBOOKS] = JsonInstant.encodeToString(settings.lorebooks)
             preferences[QUICK_MESSAGES] = JsonInstant.encodeToString(settings.quickMessages)
+            preferences[TOOL_APPROVAL_OVERRIDES] = JsonInstant.encodeToString(settings.toolApprovalOverrides)
             preferences[WEB_SERVER_ENABLED] = settings.webServerEnabled
             preferences[WORKSPACE_ROOT_MODE] = settings.workspaceRootMode
             preferences[FLOATING_TASK_WINDOW] = settings.floatingTaskWindowEnabled
@@ -621,8 +628,8 @@ data class DisplaySetting(
     val chatCustomFontName: String = "",
     val enableVolumeKeyScroll: Boolean = false,
     val volumeKeyScrollRatio: Float = 1.0f,
-    val enableHtmlRendering: Boolean = true,  // 高级渲染: 用 WebView 渲染包含 HTML 的消息 (ST 风格角色卡)
-    val userPersona: String = "",             // 用户人设描述 (ST persona), 注入系统提示词并可经 {{persona}} 引用
+    val enableHtmlRendering: Boolean = true,
+    val userPersona: String = "",
 )
 
 @Serializable

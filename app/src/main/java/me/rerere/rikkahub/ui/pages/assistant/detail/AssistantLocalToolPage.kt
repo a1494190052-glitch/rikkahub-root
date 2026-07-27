@@ -104,6 +104,15 @@ private fun AssistantLocalToolContent(
         modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp).padding(innerPadding).imePadding(),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
+        // 子代理 (kimi-code) — Assistant 级开关
+        CardGroup(title = { Text("子代理") }) {
+            item(
+                headlineContent = { Text("启用子代理") },
+                supportingContent = { Text("开启后 AI 可自动派生子代理（explore/coder/reviewer）并行处理任务。关闭后子代理功能不可用") },
+                trailingContent = { Switch(checked = assistant.enableSubagents, onCheckedChange = { onUpdate(assistant.copy(enableSubagents = it)) }) }
+            )
+        }
+
         CardGroup {
             item(headlineContent = { Text(stringResource(R.string.assistant_page_local_tools_javascript_engine_title)) }, supportingContent = { Text(stringResource(R.string.assistant_page_local_tools_javascript_engine_desc)) }, trailingContent = { Switch(checked = assistant.localTools.contains(LocalToolOption.JavascriptEngine), onCheckedChange = { toggleLocalTool(LocalToolOption.JavascriptEngine, it) }) })
             item(headlineContent = { Text(stringResource(R.string.assistant_page_local_tools_time_info_title)) }, supportingContent = { Text(stringResource(R.string.assistant_page_local_tools_time_info_desc)) }, trailingContent = { Switch(checked = assistant.localTools.contains(LocalToolOption.TimeInfo), onCheckedChange = { toggleLocalTool(LocalToolOption.TimeInfo, it) }) })
@@ -113,7 +122,7 @@ private fun AssistantLocalToolContent(
             item(headlineContent = { Text(stringResource(R.string.assistant_page_local_tools_screen_time_title)) }, supportingContent = { Text(stringResource(R.string.assistant_page_local_tools_screen_time_desc)) }, trailingContent = { Switch(checked = assistant.localTools.contains(LocalToolOption.ScreenTime), onCheckedChange = { toggleLocalTool(LocalToolOption.ScreenTime, it) }) })
             item(headlineContent = { Text(stringResource(R.string.assistant_page_local_tools_calendar_title)) }, supportingContent = { Text(stringResource(R.string.assistant_page_local_tools_calendar_desc)) }, trailingContent = { Switch(checked = assistant.localTools.contains(LocalToolOption.Calendar), onCheckedChange = { toggleLocalTool(LocalToolOption.Calendar, it) }) })
             item(headlineContent = { Text(stringResource(R.string.assistant_page_local_tools_root_shell_title)) }, supportingContent = { Text(stringResource(R.string.assistant_page_local_tools_root_shell_desc)) }, trailingContent = { Switch(checked = assistant.localTools.contains(LocalToolOption.RootShell), onCheckedChange = { toggleLocalTool(LocalToolOption.RootShell, it) }) })
-            item(headlineContent = { Text(stringResource(R.string.assistant_page_local_tools_sub_agents_title)) }, supportingContent = { Text(stringResource(R.string.assistant_page_local_tools_sub_agents_desc)) }, trailingContent = { Switch(checked = assistant.localTools.contains(LocalToolOption.SubAgents), onCheckedChange = { toggleLocalTool(LocalToolOption.SubAgents, it) }) })
+            item(headlineContent = { Text("轻量侧问 (AskBtw)") }, supportingContent = { Text("允许 AI 快速向另一个 AI 提问获取第二意见，无需启动完整子代理") }, trailingContent = { Switch(checked = assistant.localTools.contains(LocalToolOption.AskBtw), onCheckedChange = { toggleLocalTool(LocalToolOption.AskBtw, it) }) })
             item(headlineContent = { Text(stringResource(R.string.assistant_page_local_tools_scheduler_title)) }, supportingContent = { Text(stringResource(R.string.assistant_page_local_tools_scheduler_desc)) }, trailingContent = { Switch(checked = assistant.localTools.contains(LocalToolOption.Scheduler), onCheckedChange = { toggleLocalTool(LocalToolOption.Scheduler, it) }) })
         }
         CardGroup(title = { Text(stringResource(R.string.assistant_page_local_tools_approval_section_title)) }) {

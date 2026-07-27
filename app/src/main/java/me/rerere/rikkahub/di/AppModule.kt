@@ -3,6 +3,7 @@ package me.rerere.rikkahub.di
 import kotlinx.serialization.json.Json
 import me.rerere.highlight.Highlighter
 import me.rerere.rikkahub.AppScope
+import me.rerere.rikkahub.data.ai.subagent.SubagentHost
 import me.rerere.rikkahub.data.ai.tools.local.LocalTools
 import me.rerere.rikkahub.data.event.AppEventBus
 import me.rerere.rikkahub.service.ChatNotificationManager
@@ -19,19 +20,10 @@ import org.koin.dsl.module
 val appModule = module {
     single<Json> { JsonInstant }
 
-    single {
-        Highlighter(get())
-    }
+    single { Highlighter(get()) }
+    single { AppEventBus() }
+    single { LocalTools(get(), get(), get(), get(), get(), get(), get(), get()) }
 
-    single {
-        AppEventBus()
-    }
-
-    single {
-        LocalTools(get(), get(), get(), get(), get(), get(), get(), get())
-    }
-
-    // 持久 Shell 会话注册表(workspace/root 复用, 空闲自动回收)
     single {
         val context: android.content.Context = get()
         me.rerere.workspace.ShellSessionManager(
@@ -57,18 +49,10 @@ val appModule = module {
         )
     }
 
-    // Shell 审计日志
-    single {
-        me.rerere.rikkahub.service.shell.ShellAuditLogger(get<me.rerere.rikkahub.data.db.AppDatabase>().shellAuditDao())
-    }
+    single { me.rerere.rikkahub.service.shell.ShellAuditLogger(get<me.rerere.rikkahub.data.db.AppDatabase>().shellAuditDao()) }
 
-    // 持久 PTY 会话组管理器 (L2: AI 多轮交互终端)
-    // name 为主键, 同名自动复用, 最多 4 个并发
-    single {
-        me.rerere.rikkahub.service.shell.PtySessionManager(context = get())
-    }
+    single { me.rerere.rikkahub.service.shell.PtySessionManager(context = get()) }
 
-    // 后台 Shell 任务管理器
     single {
         val context: android.content.Context = get()
         me.rerere.rikkahub.service.shell.BackgroundShellManager(
@@ -91,42 +75,22 @@ val appModule = module {
                     ),
                 ),
             ),
-            rootModeProvider = {
-                get<me.rerere.rikkahub.data.datastore.SettingsStore>().settingsFlow.value.workspaceRootMode
-            },
+            rootModeProvider = { get<me.rerere.rikkahub.data.datastore.SettingsStore>().settingsFlow.value.workspaceRootMode },
             auditLogger = get(),
         )
     }
 
-    single {
-        UpdateChecker(get())
-    }
+    single { UpdateChecker(get()) }
+    single { AppScope() }
+    single<EmojiData> { EmojiUtils.loadEmoji(get()) }
+    single { TTSManager(get()) }
+    single { SoundEffectPlayer(get()) }
 
-    single {
-        AppScope()
-    }
+    // ---- 子代理系统 (kimi-code) ----
+    single { SubagentHost(generationHandler = get()) }
 
-    single<EmojiData> {
-        EmojiUtils.loadEmoji(get())
-    }
-
-    single {
-        TTSManager(get())
-    }
-
-    single {
-        SoundEffectPlayer(get())
-    }
-
-    // 生成通知与业务解耦：ChatService 只发事件，通知由这里消费；
-    // createdAtStart 保证进程启动即订阅，否则后台生成的事件会因无订阅者而丢失
     single(createdAtStart = true) {
-        ChatNotificationManager(
-            context = get(),
-            appScope = get(),
-            eventBus = get(),
-            settingsStore = get(),
-        )
+        ChatNotificationManager(context = get(), appScope = get(), eventBus = get(), settingsStore = get())
     }
 
     single {
@@ -150,19 +114,13 @@ val appModule = module {
             folderRepository = get(),
             shellSessionManager = get(),
             backgroundShellManager = get(),
-            shellAuditLogger = get()
+            shellAuditLogger = get(),
+            subagentHost = get(),
+            json = get(),
         )
     }
 
     single {
-        WebServerManager(
-            context = get(),
-            appScope = get(),
-            chatService = get(),
-            conversationRepo = get(),
-            folderRepo = get(),
-            settingsStore = get(),
-            filesManager = get()
-        )
+        WebServerManager(context = get(), appScope = get(), chatService = get(), conversationRepo = get(), folderRepo = get(), settingsStore = get(), filesManager = get())
     }
 }
