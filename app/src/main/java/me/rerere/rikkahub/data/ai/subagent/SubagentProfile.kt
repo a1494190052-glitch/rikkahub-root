@@ -1,6 +1,5 @@
 package me.rerere.rikkahub.data.ai.subagent
 
-import kotlinx.datetime.Instant
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import me.rerere.ai.core.ReasoningLevel
@@ -8,9 +7,6 @@ import me.rerere.ai.core.TokenUsage
 import me.rerere.rikkahub.data.ai.tools.local.LocalToolOption
 import kotlin.uuid.Uuid
 
-/**
- * Subagent 配置档 —— 移植自 kimi-code 的 ResolvedAgentProfile。
- */
 @Serializable
 data class SubagentProfile(
     val name: String,
@@ -36,98 +32,53 @@ data class SubagentProfile(
 ) {
     init {
         require(name.isNotBlank()) { "Subagent profile name must not be blank" }
-        require(name.matches(IdentifierRegex)) {
-            "Subagent profile name must be lowercase letters/digits/underscore: $name"
-        }
+        require(name.matches(IdentifierRegex)) { "Subagent profile name must be lowercase letters/digits/underscore: $name" }
     }
 
     companion object {
         val IdentifierRegex = Regex("^[a-z][a-z0-9_]*$")
-
         val FILE_MUTATING_TOOLS: Set<String> = setOf("workspace_write_file", "workspace_edit_file")
-
         val FULLY_READONLY_EXCLUDED_TOOLS: Set<String> = FILE_MUTATING_TOOLS + "workspace_shell"
-
         const val DEFAULT_SUMMARY_MIN_LENGTH = 0
         const val DEFAULT_SUMMARY_CONTINUATION_ATTEMPTS = 0
 
         val BUILTIN: List<SubagentProfile> = listOf(
             SubagentProfile(
-                name = "explore",
-                displayName = "Explorer",
+                name = "explore", displayName = "Explorer",
                 description = "Explore and gather information autonomously. Use for research, reading files, searching, and producing a factual summary.",
                 excludedTools = FULLY_READONLY_EXCLUDED_TOOLS,
-                systemPrompt = """
-You are an exploration subagent. Your job is to autonomously investigate the task
-using the tools available to you, then return a concise but complete factual summary.
-Do not ask the user questions — make reasonable assumptions and proceed.
-
-Read-only discipline: you only have read-only tools available. You investigate; you do not
-modify the workspace.
-
-Verify, don't assert: before reporting a root cause or conclusion, state the concrete
-verification you ran and its output. A hypothesis dressed as a root cause is not a result.
-Always end with a structured summary of your findings.
-""".trimIndent(),
+                systemPrompt = "You are an exploration subagent. Investigate autonomously using read-only tools, then return a concise but complete factual summary. Verify before asserting — state the concrete verification you ran and its output. Always end with a structured summary.",
                 maxSteps = 16,
             ),
             SubagentProfile(
-                name = "coder",
-                displayName = "Coder",
-                description = "Execute a well-scoped coding task autonomously and report results. Use for writing or modifying files, running shell commands, and verifying outcomes.",
-                systemPrompt = """
-You are a coding subagent. Complete the assigned task autonomously using your tools.
-Make changes, verify them, and report what you did and whether it succeeded.
-Return a concise summary of changes and verification results.
-Do not ask the user questions — proceed with reasonable defaults.
-""".trimIndent(),
+                name = "coder", displayName = "Coder",
+                description = "Execute a well-scoped coding task autonomously and report results.",
+                systemPrompt = "You are a coding subagent. Complete the assigned task autonomously. Make changes, verify them, and report results concisely. Do not ask questions — proceed with reasonable defaults.",
                 maxSteps = 20,
             ),
             SubagentProfile(
-                name = "reviewer",
-                displayName = "Reviewer",
-                description = "Review / critique an artifact or plan and return structured feedback. Read-only oriented; does not make changes.",
-                systemPrompt = """
-You are a review subagent. Analyze the subject described in the task, optionally use
-read-only tools to inspect it, and return structured feedback: strengths, issues,
-and concrete suggestions. Do not modify anything unless explicitly asked.
-""".trimIndent(),
-                inheritTools = true,
-                excludedTools = FULLY_READONLY_EXCLUDED_TOOLS,
-                maxSteps = 12,
+                name = "reviewer", displayName = "Reviewer",
+                description = "Review / critique an artifact or plan and return structured feedback. Read-only.",
+                systemPrompt = "You are a review subagent. Analyze the subject, optionally use read-only tools to inspect it, and return structured feedback: strengths, issues, and concrete suggestions.",
+                inheritTools = true, excludedTools = FULLY_READONLY_EXCLUDED_TOOLS, maxSteps = 12,
             ),
         )
     }
 }
 
-fun mergeSubagentProfiles(
-    custom: List<SubagentProfile>,
-    disabledBuiltin: Set<String> = emptySet(),
-): List<SubagentProfile> {
+fun mergeSubagentProfiles(custom: List<SubagentProfile>, disabledBuiltin: Set<String> = emptySet()): List<SubagentProfile> {
     val byName = LinkedHashMap<String, SubagentProfile>()
-    SubagentProfile.BUILTIN
-        .filter { it.name !in disabledBuiltin }
-        .forEach { byName[it.name] = it }
+    SubagentProfile.BUILTIN.filter { it.name !in disabledBuiltin }.forEach { byName[it.name] = it }
     custom.forEach { byName[it.name] = it }
     return byName.values.toList()
 }
 
-fun upsertSubagentProfile(
-    custom: List<SubagentProfile>,
-    profile: SubagentProfile,
-): List<SubagentProfile> {
+fun upsertSubagentProfile(custom: List<SubagentProfile>, profile: SubagentProfile): List<SubagentProfile> {
     val exists = custom.any { it.name == profile.name }
-    return if (exists) {
-        custom.map { if (it.name == profile.name) profile else it }
-    } else {
-        custom + profile
-    }
+    return if (exists) custom.map { if (it.name == profile.name) profile else it } else custom + profile
 }
 
-fun removeSubagentProfile(
-    custom: List<SubagentProfile>,
-    name: String,
-): List<SubagentProfile> = custom.filterNot { it.name == name }
+fun removeSubagentProfile(custom: List<SubagentProfile>, name: String): List<SubagentProfile> = custom.filterNot { it.name == name }
 
 @Serializable
 data class SubagentResult(
@@ -144,26 +95,7 @@ data class SubagentResult(
 
 @Serializable
 sealed interface SubagentTranscriptStep {
-    @Serializable
-    @SerialName("reasoning")
-    data class Reasoning(
-        val text: String,
-        val createdAt: Long = 0,
-    ) : SubagentTranscriptStep
-
-    @Serializable
-    @SerialName("tool_call")
-    data class ToolCall(
-        val name: String,
-        val input: String,
-        val output: String,
-        val executed: Boolean,
-        val childTranscript: List<SubagentTranscriptStep> = emptyList(),
-    ) : SubagentTranscriptStep
-
-    @Serializable
-    @SerialName("text")
-    data class Text(
-        val text: String,
-    ) : SubagentTranscriptStep
+    @Serializable @SerialName("reasoning") data class Reasoning(val text: String, val createdAt: Long = 0) : SubagentTranscriptStep
+    @Serializable @SerialName("tool_call") data class ToolCall(val name: String, val input: String, val output: String, val executed: Boolean, val childTranscript: List<SubagentTranscriptStep> = emptyList()) : SubagentTranscriptStep
+    @Serializable @SerialName("text") data class Text(val text: String) : SubagentTranscriptStep
 }
