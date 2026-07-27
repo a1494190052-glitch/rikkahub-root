@@ -4,6 +4,8 @@ import android.annotation.SuppressLint
 import android.content.Intent
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.view.KeyEvent
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -166,7 +168,9 @@ class RouteActivity : ComponentActivity() {
         enableEdgeToEdge()
         disableNavigationBarContrast()
         super.onCreate(savedInstanceState)
-        if (CrashHandler.hasCrashed(this)) {
+        // 智能安全模式：仅当同版本 + 2分钟内崩溃才进入（启动崩溃），
+        // 运行时崩溃或更新 APK 后不再误触发
+        if (CrashHandler.shouldEnterSafeMode(this)) {
             startActivity(Intent(this, SafeModeActivity::class.java))
             finish()
             return
@@ -195,6 +199,10 @@ class RouteActivity : ComponentActivity() {
                 AppRoutes()
             }
         }
+        // 启动成功 5 秒后清除崩溃标志 → 后续运行时崩溃不再触发安全模式
+        Handler(Looper.getMainLooper()).postDelayed({
+            CrashHandler.markLaunchSuccess(this)
+        }, 5000L)
     }
 
     private fun disableNavigationBarContrast() {
