@@ -6,6 +6,7 @@ import me.rerere.rikkahub.plugin.model.PluginInfo
 import me.rerere.rikkahub.plugin.model.PluginManifest
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.Future
 import java.util.concurrent.TimeUnit
@@ -13,7 +14,12 @@ import java.util.concurrent.TimeoutException
 
 /**
  * Plugin loader that manages QuickJS sandbox lifecycle.
- * Uses a single-thread executor to ensure QuickJS thread safety.
+ *
+ * Threading model:
+ * - Each plugin gets its own single-thread executor (pluginId → ExecutorService).
+ * - Different plugins execute in PARALLEL on separate threads.
+ * - The same plugin's calls are SERIALIZED (QuickJS context is not thread-safe).
+ * - This replaces the old shared SingleThreadExecutor that serialized ALL plugins.
  */
 class PluginLoader(
     private val pluginDataStoreFactory: (String) -> PluginDataStore,
@@ -23,15 +29,29 @@ class PluginLoader(
         private const val CALL_TIMEOUT_SECONDS = 16L
     }
 
-    private val executor = Executors.newSingleThreadExecutor { r ->
-        Thread(r, "PluginLoader-QuickJS").apply { isDaemon = true }
-    }
-
     private val loadedPlugins = ConcurrentHashMap<String, LoadedPlugin>()
 
     /**
+     * Per-plugin executor map. Each plugin has its own single-thread executor
+     * to ensure QuickJS thread safety within a plugin while allowing
+     * parallel execution across different plugins.
+     */
+    private val pluginExecutors = ConcurrentHashMap<String, ExecutorService>()
+
+    /**
+     * Get or create a dedicated single-thread executor for a plugin.
+     */
+    private fun getOrCreateExecutor(pluginId: String): ExecutorService {
+        return pluginExecutors.getOrPut(pluginId) {
+            Executors.newSingleThreadExecutor { r ->
+                Thread(r, "Plugin-$pluginId").apply { isDaemon = true }
+            }
+        }
+    }
+
+    /**
      * Load a plugin: create sandbox → inject config → execute entry → verify tools.
-     * Must be called from any thread; execution happens on the single QuickJS thread.
+     * Execution happens on the plugin's own dedicated thread.
      */
     fun loadPlugin(
         pluginDir: File,
@@ -45,6 +65,8 @@ class PluginLoader(
         if (loadedPlugins.containsKey(pluginId)) {
             unloadPlugin(pluginId)
         }
+
+        val executor = getOrCreateExecutor(pluginId)
 
         val future = executor.submit<LoadedPlugin> {
             val dataStore = pluginDataStoreFactory(pluginId)
@@ -120,12 +142,31 @@ class PluginLoader(
 
     /**
      * Unload a plugin and destroy its sandbox.
+     * Shuts down the plugin's dedicated executor.
      */
     fun unloadPlugin(pluginId: String) {
         val plugin = loadedPlugins.remove(pluginId) ?: return
         Log.i(TAG, "Unloading plugin: $pluginId")
 
-        executor.submit {
+        val executor = pluginExecutors.remove(pluginId)
+        if (executor != null) {
+            executor.submit {
+                try {
+                    plugin.sandbox.destroy()
+                } catch (e: Exception) {
+                    Log.w(TAG, "Error destroying sandbox for $pluginId", e)
+                }
+            }
+            executor.shutdown()
+            try {
+                if (!executor.awaitTermination(5, TimeUnit.SECONDS)) {
+                    executor.shutdownNow()
+                }
+            } catch (e: InterruptedException) {
+                executor.shutdownNow()
+            }
+        } else {
+            // Fallback: destroy directly if no executor found
             try {
                 plugin.sandbox.destroy()
             } catch (e: Exception) {
@@ -136,11 +177,15 @@ class PluginLoader(
 
     /**
      * Call a tool function on a loaded plugin.
-     * Executes on the QuickJS thread with timeout control.
+     * Executes on the plugin's own dedicated thread with timeout control.
+     * Different plugins can execute in parallel; same plugin calls are serialized.
      */
     fun callTool(pluginId: String, toolName: String, paramsJson: String): String {
         val plugin = loadedPlugins[pluginId]
             ?: return """{"error":"Plugin not loaded: $pluginId"}"""
+
+        val executor = pluginExecutors[pluginId]
+            ?: return """{"error":"Plugin executor not found: $pluginId"}"""
 
         val future: Future<String> = executor.submit<String> {
             try {
@@ -163,13 +208,17 @@ class PluginLoader(
 
     /**
      * Broadcast an event to all loaded plugins that have registered hooks for it.
+     * Each plugin's hooks execute on that plugin's own thread (parallel across plugins).
      */
     fun callEvent(event: String, paramsJson: String = "{}") {
         val plugins = loadedPlugins.values.toList()
 
-        executor.submit {
-            for (plugin in plugins) {
-                val hooks = plugin.manifest.hooks.filter { it.event == event }
+        for (plugin in plugins) {
+            val hooks = plugin.manifest.hooks.filter { it.event == event }
+            if (hooks.isEmpty()) continue
+
+            val executor = pluginExecutors[plugin.id] ?: continue
+            executor.submit {
                 for (hook in hooks) {
                     try {
                         plugin.sandbox.callEvent(hook.handler, paramsJson)
@@ -197,17 +246,22 @@ class PluginLoader(
     fun getLoadedPlugin(pluginId: String): LoadedPlugin? = loadedPlugins[pluginId]
 
     /**
-     * Unload all plugins and shut down the executor.
+     * Unload all plugins and shut down all executors.
      */
     fun destroy() {
         loadedPlugins.keys.toList().forEach { unloadPlugin(it) }
-        executor.shutdown()
-        try {
-            if (!executor.awaitTermination(5, TimeUnit.SECONDS)) {
+
+        // Ensure all executors are shut down
+        pluginExecutors.forEach { (id, executor) ->
+            executor.shutdown()
+            try {
+                if (!executor.awaitTermination(3, TimeUnit.SECONDS)) {
+                    executor.shutdownNow()
+                }
+            } catch (e: InterruptedException) {
                 executor.shutdownNow()
             }
-        } catch (e: InterruptedException) {
-            executor.shutdownNow()
         }
+        pluginExecutors.clear()
     }
 }

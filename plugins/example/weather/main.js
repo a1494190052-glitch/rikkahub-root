@@ -1,11 +1,11 @@
 /**
  * Weather Plugin for RikkaHub
  * Uses Open-Meteo API (free, no API key required)
- * ES5 compatible syntax
+ * ES2020+ syntax with async/await
  */
 
 // Weather code mapping
-var weatherCodes = {
+const weatherCodes = {
     0: 'Clear sky',
     1: 'Mainly clear',
     2: 'Partly cloudy',
@@ -33,65 +33,61 @@ var weatherCodes = {
     86: 'Heavy snow showers',
     95: 'Thunderstorm',
     96: 'Thunderstorm with slight hail',
-    99: 'Thunderstorm with heavy hail'
+    99: 'Thunderstorm with heavy hail',
 };
 
 /**
  * Get current weather for a location
  */
-exports.get_weather = function(params) {
-    var lat = params.latitude;
-    var lon = params.longitude;
-    var unit = params.unit || config.default_unit || 'celsius';
+exports.get_weather = async (params) => {
+    const { latitude: lat, longitude: lon } = params;
+    const unit = params.unit || config.default_unit || 'celsius';
 
     if (lat === undefined || lon === undefined) {
         return { error: 'latitude and longitude are required' };
     }
 
-    var tempUnit = unit === 'fahrenheit' ? 'fahrenheit' : 'celsius';
-    var windUnit = unit === 'fahrenheit' ? 'mph' : 'kmh';
+    const tempUnit = unit === 'fahrenheit' ? 'fahrenheit' : 'celsius';
+    const windUnit = unit === 'fahrenheit' ? 'mph' : 'kmh';
 
-    var url = 'https://api.open-meteo.com/v1/forecast' +
-        '?latitude=' + lat +
-        '&longitude=' + lon +
-        '&current=temperature_2m,relative_humidity_2m,apparent_temperature,weather_code,wind_speed_10m' +
-        '&temperature_unit=' + tempUnit +
-        '&wind_speed_unit=' + windUnit +
-        '&timezone=auto';
+    const url = `https://api.open-meteo.com/v1/forecast`
+        + `?latitude=${lat}&longitude=${lon}`
+        + `&current=temperature_2m,relative_humidity_2m,apparent_temperature,weather_code,wind_speed_10m`
+        + `&temperature_unit=${tempUnit}&wind_speed_unit=${windUnit}&timezone=auto`;
 
-    console.log('Fetching weather for lat=' + lat + ', lon=' + lon);
+    console.log(`Fetching weather for lat=${lat}, lon=${lon}`);
 
-    var response = fetch(url);
+    const response = await fetch(url);
 
     if (!response.ok) {
-        return { error: 'Weather API returned status ' + response.status };
+        return { error: `Weather API returned status ${response.status}` };
     }
 
-    var data = response.json();
+    const data = await response.json();
 
     if (!data.current) {
         return { error: 'No weather data available for this location' };
     }
 
-    var current = data.current;
-    var weatherCode = current.weather_code;
-    var condition = weatherCodes[weatherCode] || ('Unknown (code ' + weatherCode + ')');
+    const current = data.current;
+    const weatherCode = current.weather_code;
+    const condition = weatherCodes[weatherCode] || `Unknown (code ${weatherCode})`;
 
-    var result = {
+    const result = {
         location: {
             latitude: lat,
             longitude: lon,
-            timezone: data.timezone || 'unknown'
+            timezone: data.timezone || 'unknown',
         },
         current: {
             temperature: current.temperature_2m,
             unit: tempUnit === 'fahrenheit' ? '\u00B0F' : '\u00B0C',
             feels_like: current.apparent_temperature,
-            condition: condition,
+            condition,
             weather_code: weatherCode,
-            humidity: current.relative_humidity_2m + '%',
-            wind_speed: current.wind_speed_10m + (windUnit === 'mph' ? ' mph' : ' km/h')
-        }
+            humidity: `${current.relative_humidity_2m}%`,
+            wind_speed: `${current.wind_speed_10m}${windUnit === 'mph' ? ' mph' : ' km/h'}`,
+        },
     };
 
     // Store last query in dataStore
@@ -105,61 +101,52 @@ exports.get_weather = function(params) {
 /**
  * Geocode a city name to coordinates
  */
-exports.geocode = function(params) {
-    var city = params.city;
+exports.geocode = async (params) => {
+    const { city } = params;
 
     if (!city) {
         return { error: 'city parameter is required' };
     }
 
-    var url = 'https://geocoding-api.open-meteo.com/v1/search' +
-        '?name=' + encodeURIComponent(city) +
-        '&count=3' +
-        '&language=en' +
-        '&format=json';
+    const url = `https://geocoding-api.open-meteo.com/v1/search`
+        + `?name=${encodeURIComponent(city)}&count=3&language=en&format=json`;
 
-    console.log('Geocoding city: ' + city);
+    console.log(`Geocoding city: ${city}`);
 
-    var response = fetch(url);
+    const response = await fetch(url);
 
     if (!response.ok) {
-        return { error: 'Geocoding API returned status ' + response.status };
+        return { error: `Geocoding API returned status ${response.status}` };
     }
 
-    var data = response.json();
+    const data = await response.json();
 
     if (!data.results || data.results.length === 0) {
-        return { error: 'No results found for: ' + city };
+        return { error: `No results found for: ${city}` };
     }
 
-    var results = [];
-    for (var i = 0; i < data.results.length; i++) {
-        var r = data.results[i];
-        results.push({
-            name: r.name,
-            country: r.country || '',
-            admin1: r.admin1 || '',
-            latitude: r.latitude,
-            longitude: r.longitude,
-            timezone: r.timezone || 'auto'
-        });
-    }
+    const results = data.results.map((r) => ({
+        name: r.name,
+        country: r.country || '',
+        admin1: r.admin1 || '',
+        latitude: r.latitude,
+        longitude: r.longitude,
+        timezone: r.timezone || 'auto',
+    }));
 
     return {
         query: city,
-        results: results,
-        hint: 'Use the latitude and longitude with get_weather tool'
+        results,
+        hint: 'Use the latitude and longitude with get_weather tool',
     };
 };
 
 /**
  * Event hook: called when a message is sent
  */
-exports.onMessageSent = function(params) {
-    // Log message activity
-    var count = dataStore.get('message_count');
-    count = count ? parseInt(count) + 1 : 1;
+exports.onMessageSent = (params) => {
+    const count = parseInt(dataStore.get('message_count') || '0', 10) + 1;
     dataStore.set('message_count', String(count));
-    console.log('Message sent event received. Total: ' + count);
+    console.log(`Message sent event received. Total: ${count}`);
     return { success: true };
 };

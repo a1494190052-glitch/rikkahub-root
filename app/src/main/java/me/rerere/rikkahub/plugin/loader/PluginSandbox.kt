@@ -1,6 +1,7 @@
 package me.rerere.rikkahub.plugin.loader
 
 import android.util.Log
+import com.whl.quickjs.wrapper.JSCallFunction
 import com.whl.quickjs.wrapper.QuickJSContext
 import me.rerere.rikkahub.plugin.data.PluginDataStore
 import okhttp3.MediaType.Companion.toMediaType
@@ -14,15 +15,15 @@ import java.util.concurrent.TimeUnit
  *
  * Provides:
  * - console.log redirection
- * - Synchronous fetch() via OkHttp (15s timeout)
+ * - Native fetch() via Java-JS bridge (JSCallFunction) with Promise support
+ * - Full ES2020+ support (async/await, template literals, destructuring, classes, etc.)
  * - config object injection (user settings)
  * - dataStore object injection (per-plugin KV storage)
- * - Network domain whitelist enforcement
- * - ES5 preprocessing (async→function, await removal)
+ * - Network domain whitelist enforcement (Java-side)
  *
- * Architecture: Uses a "request-intercept" pattern for native bridges.
- * JS functions store requests in globals; Java performs I/O and injects results.
- * This avoids dependency on specific QuickJS wrapper callback APIs.
+ * Architecture: Uses JSCallFunction to register a synchronous __native_fetch bridge.
+ * JS fetch() wraps this in a Promise for async/await compatibility.
+ * No more request-intercept / re-execution hack.
  */
 class PluginSandbox(
     private val pluginId: String,
@@ -31,8 +32,8 @@ class PluginSandbox(
 ) {
     companion object {
         private const val TAG = "PluginSandbox"
-        private const val FETCH_TIMEOUT_SECONDS = 15L
-        private const val MAX_FETCH_ITERATIONS = 20
+        private const val FETCH_TIMEOUT_SECONDS = 16L
+        private const val MAX_ASYNC_PUMP_ITERATIONS = 200
     }
 
     private var context: QuickJSContext? = null
@@ -89,93 +90,101 @@ class PluginSandbox(
             "__init__.js"
         )
 
-        // Inject allowed hosts array
-        val hostsJson = allowedHosts.joinToString(",", "[", "]") { "\"$it\"" }
-        ctx.evaluate("var __allowed_hosts__ = $hostsJson;", "__hosts__.js")
-
-        // Inject fetch implementation (request-intercept pattern)
-        injectFetchShim(ctx)
+        // Inject native fetch bridge via JSCallFunction
+        injectNativeFetch(ctx)
 
         // Inject dataStore with pre-loaded values
         injectDataStore(ctx)
     }
 
     /**
-     * Inject fetch() shim using request-intercept pattern with response caching.
-     * The JS fetch() checks a cache first; on cache miss, stores the request in
-     * __fetch_request__ for Java to process. callFunction() detects pending requests,
-     * performs HTTP, injects results into the cache, and re-invokes the function.
-     * This supports multiple fetch() calls per function invocation.
+     * Inject native fetch() using JSCallFunction Java-JS bridge.
+     *
+     * Registers __native_fetch(url, method, headersJson, body) as a Java function
+     * that performs synchronous OkHttp requests with domain whitelist enforcement.
+     *
+     * The JS-side fetch() wrapper calls __native_fetch synchronously and returns
+     * a Promise.resolve(response) for async/await compatibility.
      */
-    private fun injectFetchShim(ctx: QuickJSContext) {
+    private fun injectNativeFetch(ctx: QuickJSContext) {
+        val globalObj = ctx.getGlobalObject()
+
+        // Register the native fetch bridge - callable from JS as __native_fetch(url, method, headers, body)
+        globalObj.setProperty("__native_fetch", JSCallFunction { args ->
+            val url = args.getOrNull(0)?.toString() ?: ""
+            val method = args.getOrNull(1)?.toString() ?: "GET"
+            val headersJson = args.getOrNull(2)?.toString() ?: "{}"
+            val body = args.getOrNull(3)?.toString()
+
+            // Domain whitelist check (Java-side, cannot be bypassed by JS)
+            if (!isHostAllowed(url)) {
+                return@JSCallFunction """{"status":403,"statusText":"Forbidden","body":"Host not in whitelist: ${escapeJsonString(url)}"}"""
+            }
+
+            performFetch(url, method, headersJson, body)
+        })
+
+        // Inject JS-side fetch wrapper with Promise support
         ctx.evaluate(
             """
-            var __fetch_request__ = null;
-            var __fetch_cache__ = {};
-
             function __check_host_allowed__(url) {
-                if (!__allowed_hosts__ || __allowed_hosts__.length === 0) return true;
+                var hosts = ${allowedHosts.joinToString(",", "[", "]") { "\"$it\"" }};
+                if (!hosts || hosts.length === 0) return true;
                 var host = '';
                 try {
                     var match = url.match(/^https?:\/\/([^\/:]+)/);
                     if (match) host = match[1];
                 } catch(e) { return false; }
-                for (var i = 0; i < __allowed_hosts__.length; i++) {
-                    var pattern = __allowed_hosts__[i];
+                for (var i = 0; i < hosts.length; i++) {
+                    var pattern = hosts[i];
                     if (pattern === '*') return true;
                     if (host === pattern) return true;
-                    if (host.indexOf('.' + pattern) === host.length - pattern.length - 1) return true;
+                    if (host.endsWith('.' + pattern)) return true;
                 }
                 return false;
-            }
-
-            function __make_response__(respStr) {
-                try {
-                    var result = JSON.parse(respStr);
-                    return {
-                        ok: result.status >= 200 && result.status < 300,
-                        status: result.status,
-                        statusText: result.statusText || '',
-                        body: result.body || '',
-                        json: function() { try { return JSON.parse(this.body); } catch(e) { return {}; } },
-                        text: function() { return this.body; }
-                    };
-                } catch(e) {
-                    return { ok: false, status: 0, statusText: 'Parse error', body: respStr,
-                        json: function() { return {}; }, text: function() { return this.body; } };
-                }
             }
 
             function fetch(url, options) {
                 options = options || {};
                 var method = (options.method || 'GET').toUpperCase();
                 var headers = options.headers || {};
-                var body = options.body || null;
+                var body = options.body !== undefined ? options.body : null;
 
+                // Early JS-side host check for better error messages
                 if (!__check_host_allowed__(url)) {
-                    return {
-                        ok: false, status: 403, statusText: 'Forbidden',
+                    return Promise.resolve({
+                        ok: false,
+                        status: 403,
+                        statusText: 'Forbidden',
                         body: 'Host not in whitelist: ' + url,
-                        json: function() { return {}; },
-                        text: function() { return this.body; }
-                    };
+                        json: function() { return Promise.resolve({}); },
+                        text: function() { return Promise.resolve(this.body); }
+                    });
                 }
 
-                // Check cache first (keyed by url+method+body)
-                var cacheKey = method + '|' + url + '|' + (body || '');
-                if (__fetch_cache__[cacheKey]) {
-                    return __make_response__(__fetch_cache__[cacheKey]);
+                // Synchronous native call via Java bridge
+                var respStr = __native_fetch(url, method, JSON.stringify(headers), body);
+
+                var result;
+                try {
+                    result = JSON.parse(respStr);
+                } catch(e) {
+                    result = { status: 0, statusText: 'Parse error', body: respStr || '' };
                 }
 
-                // Cache miss: store request for Java to process
-                __fetch_request__ = JSON.stringify({
-                    url: url, method: method,
-                    headers: JSON.stringify(headers),
-                    body: body, cacheKey: cacheKey
-                });
+                var response = {
+                    ok: result.status >= 200 && result.status < 300,
+                    status: result.status,
+                    statusText: result.statusText || '',
+                    body: result.body || '',
+                    json: function() {
+                        try { return Promise.resolve(JSON.parse(this.body)); }
+                        catch(e) { return Promise.resolve({}); }
+                    },
+                    text: function() { return Promise.resolve(this.body); }
+                };
 
-                // Return a placeholder error (function will be re-run with cached response)
-                return __make_response__('{"status":0,"statusText":"Pending","body":""}');
+                return Promise.resolve(response);
             }
             """.trimIndent(),
             "__fetch__.js"
@@ -183,11 +192,32 @@ class PluginSandbox(
     }
 
     /**
+     * Check if a URL's host is in the allowed hosts list.
+     * Called from Java side before making OkHttp requests.
+     */
+    private fun isHostAllowed(url: String): Boolean {
+        if (allowedHosts.isEmpty()) return true
+
+        val host = try {
+            val regex = Regex("^https?://([^/:]+)")
+            regex.find(url)?.groupValues?.get(1) ?: return false
+        } catch (e: Exception) {
+            return false
+        }
+
+        for (pattern in allowedHosts) {
+            if (pattern == "*") return true
+            if (host == pattern) return true
+            if (host.endsWith(".$pattern")) return true
+        }
+        return false
+    }
+
+    /**
      * Inject dataStore API. Pre-loads existing values into a JS object.
      * Writes are stored in a JS-side map and synced back after execution.
      */
     private fun injectDataStore(ctx: QuickJSContext) {
-        // Pre-load existing dataStore values
         val existingData = dataStore?.list() ?: emptyMap()
         val dataJson = existingData.entries.joinToString(",", "{", "}") { (k, v) ->
             "\"${escapeJsonString(k)}\":\"${escapeJsonString(v)}\""
@@ -258,27 +288,12 @@ class PluginSandbox(
     }
 
     /**
-     * Preprocess ES6+ code to ES5-compatible syntax.
-     */
-    fun preprocessES5(code: String): String {
-        return code
-            .replace(Regex("\\basync\\s+function\\b"), "function")
-            .replace(Regex("\\basync\\s*\\("), "(")
-            .replace(Regex("\\bawait\\s+"), "")
-            .replace(Regex("\\bconst\\s+"), "var ")
-            .replace(Regex("\\blet\\s+"), "var ")
-            .replace(Regex("\\(([^)]*)\\)\\s*=>\\s*\\{"), "function($1) {")
-            .replace(Regex("(\\w+)\\s*=>\\s*\\{"), "function($1) {")
-            .replace(Regex("\\(([^)]*)\\)\\s*=>\\s*([^;{\\n]+)"), "function($1) { return $2; }")
-    }
-
-    /**
      * Evaluate a JavaScript file in the sandbox.
+     * No ES5 preprocessing - QuickJS natively supports ES2020+.
      */
     fun evaluateFile(code: String, fileName: String = "main.js") {
         val ctx = context ?: throw IllegalStateException("Sandbox not initialized")
-        val processed = preprocessES5(code)
-        ctx.evaluate(processed, fileName)
+        ctx.evaluate(code, fileName)
     }
 
     /**
@@ -291,16 +306,12 @@ class PluginSandbox(
 
     /**
      * Call an exported function by name with JSON parameters.
-     * Handles the fetch-intercept loop for synchronous HTTP.
+     * Supports both synchronous functions and async functions (returning Promises).
      * Returns the result as a JSON string.
      */
     fun callFunction(name: String, paramsJson: String = "{}"): String {
         val ctx = context ?: throw IllegalStateException("Sandbox not initialized")
 
-        // Reset fetch state
-        ctx.evaluate("__fetch_request__ = null; __fetch_response__ = null;", "__reset__.js")
-
-        // Build the function call script
         val escapedParams = escapeForJsString(paramsJson)
         val callScript = """
             (function() {
@@ -311,6 +322,23 @@ class PluginSandbox(
                 try {
                     var params = JSON.parse('$escapedParams');
                     var result = fn(params);
+
+                    // Check if result is a Promise/thenable (async function)
+                    if (result !== null && result !== undefined && typeof result.then === 'function') {
+                        __async_result__ = undefined;
+                        __async_error__ = undefined;
+                        __async_done__ = false;
+                        result.then(function(v) {
+                            __async_result__ = v;
+                            __async_done__ = true;
+                        }).catch(function(e) {
+                            __async_error__ = (e && e.message) ? e.message : String(e);
+                            __async_done__ = true;
+                        });
+                        return '__ASYNC_PENDING__';
+                    }
+
+                    // Synchronous result
                     if (result === undefined || result === null) {
                         return JSON.stringify({ success: true });
                     }
@@ -324,42 +352,38 @@ class PluginSandbox(
             })()
         """.trimIndent()
 
-        // Execute with fetch-intercept loop
         var result = ctx.evaluate(callScript, "call_$name.js")?.toString()
             ?: """{"error":"null result"}"""
 
-        // Handle fetch intercept: if __fetch_request__ is set, perform HTTP and re-run
-        var iterations = 0
-        while (iterations < MAX_FETCH_ITERATIONS) {
-            val pendingRequest = ctx.evaluate("__fetch_request__")?.toString()
-            if (pendingRequest == null || pendingRequest == "null" || pendingRequest.isBlank()) break
+        // Handle async functions: pump microtasks until the Promise resolves
+        if (result == "__ASYNC_PENDING__") {
+            var iterations = 0
+            while (iterations < MAX_ASYNC_PUMP_ITERATIONS) {
+                // Pump the microtask queue by evaluating a trivial Promise
+                ctx.evaluate("Promise.resolve()", "__pump__.js")
 
-            // Clear the pending request
-            ctx.evaluate("__fetch_request__ = null;", "__clear__.js")
-
-            // Parse and perform the HTTP request
-            val responseJson = try {
-                val reqParts = parseSimpleJson(pendingRequest)
-                val url = reqParts["url"] ?: ""
-                val method = reqParts["method"] ?: "GET"
-                val headers = reqParts["headers"] ?: "{}"
-                val body = reqParts["body"]
-                performFetch(url, method, headers, body)
-            } catch (e: Exception) {
-                """{"status":0,"statusText":"Error","body":"${escapeJsonString(e.message ?: "Unknown")}"}"""
+                val done = ctx.evaluate("__async_done__")
+                if (done == true || done?.toString() == "true") break
+                iterations++
             }
 
-            // Inject response and re-execute
-            ctx.evaluate(
-                "__fetch_response__ = '${escapeForJsString(responseJson)}';",
-                "__inject_response__.js"
-            )
-
-            // Re-execute the function (it will pick up the injected response)
-            result = ctx.evaluate(callScript, "call_$name.js")?.toString()
-                ?: """{"error":"null result"}"""
-
-            iterations++
+            // Check for async error
+            val asyncError = ctx.evaluate("__async_error__")?.toString()
+            if (asyncError != null && asyncError != "undefined" && asyncError != "null" && asyncError.isNotBlank()) {
+                result = """{"error":"${escapeJsonString(asyncError)}"}"""
+            } else {
+                // Extract the async result
+                val extractScript = """
+                    (function() {
+                        var r = __async_result__;
+                        if (r === undefined || r === null) return JSON.stringify({ success: true });
+                        if (typeof r === 'object') return JSON.stringify(r);
+                        return JSON.stringify({ result: r });
+                    })()
+                """.trimIndent()
+                result = ctx.evaluate(extractScript, "__async_extract__.js")?.toString()
+                    ?: """{"success":true}"""
+            }
         }
 
         // Sync dataStore changes
@@ -377,6 +401,7 @@ class PluginSandbox(
 
     /**
      * Perform actual HTTP fetch using OkHttp (synchronous).
+     * Called from the __native_fetch JSCallFunction bridge on the plugin's thread.
      */
     private fun performFetch(url: String, method: String, headersJson: String, body: String?): String {
         return try {
