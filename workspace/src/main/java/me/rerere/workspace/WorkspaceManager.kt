@@ -111,7 +111,7 @@ class WorkspaceManager(
 
     private fun makeWritableViaRoot(file: File) {
         runCatching {
-            rootRunner.execute(
+            (rootRunner as? RootShellRunner)?.execute(
                 command = "chmod 666 '${file.absolutePath.replace("'", "'\\''")}'",
                 timeoutMillis = 5000,
             )
