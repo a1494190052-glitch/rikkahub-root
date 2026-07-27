@@ -29,8 +29,9 @@ private const val RETRY_DELAY_MS = 1000L
 private const val MAX_CACHE_SIZE = 512
 
 /**
- * OpenAI 兼容的 Embedding API 调用服务
- * 使用项目已有的 OkHttpClient，支持批量嵌入、重试、缓存
+ * 统一 Embedding 服务
+ * 使用云端 API（text-embedding-3-small, dimensions=384）
+ * 统一输出维度为 384，支持 int8 量化存储
  */
 class EmbeddingService(
     private val okHttpClient: OkHttpClient,
@@ -45,7 +46,6 @@ class EmbeddingService(
      */
     private fun getEmbeddingProviderConfig(): Pair<String, String>? {
         val settings = settingsStore.settingsFlow.value
-        // 优先查找 OpenAI 类型的 provider（支持 /v1/embeddings）
         val provider = settings.providers
             .filterIsInstance<ProviderSetting.OpenAI>()
             .firstOrNull { it.enabled && it.apiKey.isNotBlank() }
@@ -57,7 +57,7 @@ class EmbeddingService(
      * 生成单条文本的嵌入向量
      * @param text 输入文本
      * @param model 嵌入模型名称（默认 text-embedding-3-small）
-     * @return 嵌入向量，失败返回 null
+     * @return 384维嵌入向量，失败返回 null
      */
     suspend fun embed(text: String, model: String = DEFAULT_MODEL): FloatArray? {
         return embedBatch(listOf(text), model).firstOrNull()
@@ -90,8 +90,9 @@ class EmbeddingService(
 
         if (uncachedTexts.isEmpty()) return results.toList()
 
-        // 调用 API
+        // 云端 API 调用
         val embeddings = callEmbeddingApi(uncachedTexts, model)
+
         if (embeddings != null) {
             embeddings.forEachIndexed { i, embedding ->
                 if (embedding != null) {
@@ -100,7 +101,6 @@ class EmbeddingService(
                     // 存入缓存
                     val cacheKey = uncachedTexts[i].hashCode()
                     if (embeddingCache.size >= MAX_CACHE_SIZE) {
-                        // 简单清理：移除一半缓存
                         val keysToRemove = embeddingCache.keys.take(MAX_CACHE_SIZE / 2)
                         keysToRemove.forEach { embeddingCache.remove(it) }
                     }
@@ -114,6 +114,7 @@ class EmbeddingService(
 
     /**
      * 调用 OpenAI 兼容的 /v1/embeddings API
+     * 使用 dimensions=384 参数统一输出维度（节省存储和计算）
      */
     private suspend fun callEmbeddingApi(texts: List<String>, model: String): List<FloatArray?>? {
         val config = getEmbeddingProviderConfig()
@@ -123,9 +124,9 @@ class EmbeddingService(
         }
         val (baseUrl, apiKey) = config
 
-        // 构建请求体
         val requestBody = buildJsonObject {
             put("model", model)
+            put("dimensions", UNIFIED_DIMENSION)
             put("input", buildJsonArray {
                 texts.forEach { text ->
                     add(JsonPrimitive(text))
@@ -134,7 +135,7 @@ class EmbeddingService(
         }.toString()
 
         val url = "$baseUrl/embeddings"
-        Log.d(TAG, "Calling embeddings API: $url, model=$model, texts=${texts.size}")
+        Log.d(TAG, "Calling embeddings API: $url, model=$model, dims=$UNIFIED_DIMENSION, texts=${texts.size}")
 
         var lastException: Exception? = null
         for (attempt in 1..MAX_RETRIES) {
@@ -173,7 +174,6 @@ class EmbeddingService(
 
     /**
      * 解析 OpenAI embeddings API 响应
-     * 格式: {"data": [{"embedding": [0.1, 0.2, ...], "index": 0}, ...]}
      */
     private fun parseEmbeddingResponse(body: String): List<FloatArray?> {
         val responseJson = json.parseToJsonElement(body).jsonObject
@@ -204,6 +204,9 @@ class EmbeddingService(
 
     companion object {
         const val DEFAULT_MODEL = "text-embedding-3-small"
+
+        /** 统一嵌入维度：使用 dimensions 参数让 API 返回 384 维（节省 75% 存储） */
+        const val UNIFIED_DIMENSION = 384
     }
 }
 

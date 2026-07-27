@@ -18,6 +18,7 @@ data class SemanticSearchResult(
 
 /**
  * 核心语义记忆管理器，协调嵌入生成、存储、检索
+ * 使用云端 Embedding API (dimensions=384) + int8 量化存储
  */
 class SemanticMemoryManager(
     private val memoryDAO: MemoryDAO,
@@ -110,7 +111,6 @@ class SemanticMemoryManager(
             .sortedByDescending { it.score }
             .take(topK)
             .also { results ->
-                // 更新访问计数
                 results.forEach { result ->
                     memoryDAO.incrementAccessCount(result.memory.id)
                 }
@@ -131,7 +131,6 @@ class SemanticMemoryManager(
     ): List<SemanticSearchResult> {
         val contextEmbedding = embeddingService.embed(context)
         if (contextEmbedding == null) {
-            // 回退：返回最重要的记忆
             return memoryDAO.getImportantMemories(assistantId, 0).take(topK).map {
                 SemanticSearchResult(memory = it, score = 0f)
             }
@@ -147,7 +146,6 @@ class SemanticMemoryManager(
                 val memEmbedding = memory.embedding?.let { VectorUtils.byteArrayToFloatArray(it) }
                     ?: return@mapNotNull null
                 val semanticScore = VectorUtils.cosineSimilarity(contextEmbedding, memEmbedding)
-                // 综合分数：语义相似度 * 0.7 + 重要性归一化 * 0.2 + 新鲜度 * 0.1
                 val importanceScore = memory.importance / 5.0f
                 val ageDays = (System.currentTimeMillis() - memory.createdAt) / (1000.0 * 60 * 60 * 24)
                 val freshnessScore = (1.0 / (1.0 + ageDays / 30.0)).toFloat()
@@ -172,9 +170,8 @@ class SemanticMemoryManager(
         if (memories.size < 2) return 0
 
         val toDelete = mutableSetOf<Int>()
-        val mergedContents = mutableMapOf<Int, String>() // keepId -> merged content
+        val mergedContents = mutableMapOf<Int, String>()
 
-        // 找到所有高度相似的记忆对
         for (i in memories.indices) {
             if (memories[i].id in toDelete) continue
             val embeddingI = memories[i].embedding?.let { VectorUtils.byteArrayToFloatArray(it) }
@@ -187,7 +184,6 @@ class SemanticMemoryManager(
 
                 val similarity = VectorUtils.cosineSimilarity(embeddingI, embeddingJ)
                 if (similarity >= CONSOLIDATION_SIMILARITY_THRESHOLD) {
-                    // 保留较旧/较重要的那条，合并内容
                     val keep = if (memories[i].importance >= memories[j].importance) memories[i] else memories[j]
                     val remove = if (keep.id == memories[i].id) memories[j] else memories[i]
 
@@ -200,14 +196,12 @@ class SemanticMemoryManager(
             }
         }
 
-        // 执行合并
         var deletedCount = 0
         for (id in toDelete) {
             memoryDAO.deleteMemory(id)
             deletedCount++
         }
 
-        // 更新合并后的内容
         for ((keepId, mergedContent) in mergedContents) {
             val existing = memoryDAO.getMemoryById(keepId) ?: continue
             val embedding = embeddingService.embed(mergedContent)

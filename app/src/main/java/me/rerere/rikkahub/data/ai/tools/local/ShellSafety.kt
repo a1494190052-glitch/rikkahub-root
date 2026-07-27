@@ -10,7 +10,20 @@ package me.rerere.rikkahub.data.ai.tools.local
  */
 enum class ShellRisk { READ_ONLY, WRITE, BLOCKED }
 
+/**
+ * 深度分类结果 — 包含风险等级 + 详细原因(用于向 AI 解释为什么被拦截)
+ */
+data class DeepClassification(
+    val risk: ShellRisk,
+    /** 拦截/提级原因; READ_ONLY 时为 null */
+    val reason: String? = null,
+    /** 触发问题的子命令片段(如有) */
+    val offendingSegment: String? = null,
+)
+
 object ShellSafety {
+
+    // ==================== 第一层: 静态分类(原有逻辑, 向后兼容) ====================
 
     /** 命中即拒绝执行的高危模式(对整条命令全文匹配) */
     private val BLOCKED_PATTERNS: List<Pair<Regex, String>> = listOf(
@@ -209,4 +222,257 @@ object ShellSafety {
     private val WRAPPER_COMMANDS = setOf("sudo", "nice", "time", "ionice", "stdbuf", "timeout", "nohup", "env", "\\")
     private val WHITESPACE = Regex("\\s+")
     private val REDIRECT_WRITE_REGEX = Regex("""(^|[^>])>(?!&)\s*[^&\s]|\btee\b""")
+
+    // ==================== 第二层: 动态深度检测 ====================
+
+    /** 可执行/危险命令集 — 出现在管道末端或子 shell 中即视为高风险 */
+    private val EXECUTION_COMMANDS = setOf(
+        "sh", "bash", "dash", "ash", "zsh", "ksh", "csh", "tcsh",
+        "eval", "exec", "source", ".",
+        "python", "python2", "python3", "perl", "ruby", "node", "php",
+        "nc", "ncat", "netcat", "socat",
+    )
+
+    /** 编码/解码命令 — 与执行命令组合时构成绕过 */
+    private val DECODE_COMMANDS = setOf("base64", "xxd", "openssl", "uudecode")
+
+    /**
+     * 深度分类: 在静态分类基础上增加管道解析、编码绕过检测、敏感路径检测。
+     * 纯字符串解析, 无 IO, 设计目标 < 5ms。
+     */
+    fun deepClassify(command: String): DeepClassification {
+        // 1. 快速路径: 静态 BLOCKED 直接返回
+        blockReason(command)?.let { reason ->
+            return DeepClassification(ShellRisk.BLOCKED, reason = reason)
+        }
+
+        // 2. 解析所有子命令(管道、子 shell、分号、&&、||)
+        val subCommands = parseSubCommands(command)
+
+        // 3. 检测执行命令出现在管道/子命令中
+        for (sub in subCommands) {
+            val cmd = extractCommandName(sub)
+            if (cmd in EXECUTION_COMMANDS) {
+                return DeepClassification(
+                    ShellRisk.BLOCKED,
+                    reason = "execution interpreter '$cmd' detected in pipeline/sub-command",
+                    offendingSegment = sub.trim(),
+                )
+            }
+        }
+
+        // 4. 编码绕过检测
+        encodingBypassReason(command)?.let { reason ->
+            return DeepClassification(ShellRisk.BLOCKED, reason = reason)
+        }
+
+        // 5. 敏感路径写操作检测
+        sensitivePathReason(command)?.let { reason ->
+            return DeepClassification(ShellRisk.BLOCKED, reason = reason)
+        }
+
+        // 6. 回退到静态分类
+        val static = classify(command)
+        return when (static) {
+            ShellRisk.BLOCKED -> DeepClassification(ShellRisk.BLOCKED, reason = "blocked by static pattern")
+            ShellRisk.WRITE -> DeepClassification(ShellRisk.WRITE, reason = "write operation detected")
+            ShellRisk.READ_ONLY -> DeepClassification(ShellRisk.READ_ONLY)
+        }
+    }
+
+    // ---------- 管道/子命令解析器 ----------
+
+    /**
+     * 递归解析 shell 命令, 提取所有实际执行的子命令片段。
+     * 处理: 管道(|)、分号(;)、&&、||、子 shell $(...)、反引号 `...`、括号子 shell (...)。
+     */
+    fun parseSubCommands(command: String): List<String> {
+        val results = mutableListOf<String>()
+        parseRecursive(command, results)
+        return results
+    }
+
+    private fun parseRecursive(input: String, out: MutableList<String>) {
+        // 先提取 $(...) 和 `...` 中的内容递归解析
+        var cleaned = input
+        // 提取 $(...) 内容
+        var searchFrom = 0
+        while (true) {
+            val start = cleaned.indexOf("$(", searchFrom)
+            if (start < 0) break
+            val end = findMatchingParen(cleaned, start + 1)
+            if (end > start) {
+                val inner = cleaned.substring(start + 2, end)
+                parseRecursive(inner, out)
+                searchFrom = end + 1
+            } else {
+                searchFrom = start + 2
+            }
+        }
+        // 提取 `...` 内容
+        var backtickStart = cleaned.indexOf('`')
+        while (backtickStart >= 0) {
+            val backtickEnd = cleaned.indexOf('`', backtickStart + 1)
+            if (backtickEnd > backtickStart) {
+                val inner = cleaned.substring(backtickStart + 1, backtickEnd)
+                parseRecursive(inner, out)
+                backtickStart = cleaned.indexOf('`', backtickEnd + 1)
+            } else break
+        }
+
+        // 按顶层分隔符拆分
+        val segments = splitSegments(cleaned)
+        for (seg in segments) {
+            val trimmed = seg.trim()
+            if (trimmed.isNotEmpty()) {
+                out.add(trimmed)
+            }
+        }
+    }
+
+    private fun findMatchingParen(s: String, openIdx: Int): Int {
+        var depth = 0
+        var quote: Char? = null
+        for (i in openIdx until s.length) {
+            val c = s[i]
+            when {
+                quote != null -> if (c == quote) quote = null
+                c == '\'' || c == '"' -> quote = c
+                c == '(' -> depth++
+                c == ')' -> {
+                    depth--
+                    if (depth == 0) return i
+                }
+            }
+        }
+        return -1
+    }
+
+    /** 从命令片段中提取实际命令名(跳过环境变量赋值和 wrapper) */
+    private fun extractCommandName(segment: String): String {
+        val tokens = segment.trim().split(WHITESPACE).filter { it.isNotBlank() }
+        var idx = 0
+        while (idx < tokens.size) {
+            val t = tokens[idx]
+            when {
+                t.contains('=') && !t.startsWith("-") &&
+                    t.substringBefore('=').matches(Regex("[A-Za-z_][A-Za-z0-9_]*")) -> idx++
+                t in WRAPPER_COMMANDS -> idx++
+                else -> break
+            }
+        }
+        if (idx >= tokens.size) return ""
+        return tokens[idx].substringAfterLast('/')
+    }
+
+    // ---------- 编码绕过检测 ----------
+
+    /** 检测编码绕过模式, 返回原因或 null */
+    private fun encodingBypassReason(command: String): String? {
+        // 模式 1: 解码命令 + 管道到执行器 (base64 -d | sh, xxd -r | bash, etc.)
+        val segments = splitSegments(command)
+        var hasDecode = false
+        for (seg in segments) {
+            val cmd = extractCommandName(seg)
+            if (cmd in DECODE_COMMANDS && DECODE_FLAG_REGEX.containsMatchIn(seg)) {
+                hasDecode = true
+            }
+            if (hasDecode && cmd in EXECUTION_COMMANDS) {
+                return "encoded payload piped to execution interpreter '$cmd' (decode-then-execute bypass)"
+            }
+        }
+
+        // 模式 2: eval / source / . 命令
+        for (seg in segments) {
+            val cmd = extractCommandName(seg)
+            if (cmd == "eval") return "eval command detected — arbitrary code execution risk"
+            if (cmd == "source" || cmd == ".") {
+                // source 一个非常规路径
+                if (seg.contains("/dev/") || seg.contains("/proc/")) {
+                    return "sourcing from suspicious path"
+                }
+            }
+        }
+
+        // 模式 3: ${IFS} 绕过 / $'\x..' 十六进制拼接
+        if (IFS_BYPASS_REGEX.containsMatchIn(command)) {
+            return "\${IFS} or variable-splicing bypass detected"
+        }
+        if (HEX_ESCAPE_EXEC_REGEX.containsMatchIn(command)) {
+            return "hex/octal escape sequence used to obfuscate command"
+        }
+
+        // 模式 4: /dev/tcp 或 /dev/udp 网络操作
+        if (DEV_NET_REGEX.containsMatchIn(command)) {
+            return "/dev/tcp or /dev/udp network operation detected (reverse shell risk)"
+        }
+
+        // 模式 5: printf 输出十六进制后管道到执行器
+        if (PRINTF_HEX_PIPE_REGEX.containsMatchIn(command)) {
+            return "printf hex output piped to potential execution"
+        }
+
+        return null
+    }
+
+    private val DECODE_FLAG_REGEX = Regex("""\s(-d|-D|--decode|-r|-p)\b|\benc\b""")
+    private val IFS_BYPASS_REGEX = Regex("""\$\{?IFS\}?|\$\{[A-Za-z_]*\}""")  
+    private val HEX_ESCAPE_EXEC_REGEX = Regex("""\$'\\x[0-9a-fA-F]{2}|\$'\\[0-7]{1,3}""")
+    private val DEV_NET_REGEX = Regex("""/dev/(tcp|udp)/""")
+    private val PRINTF_HEX_PIPE_REGEX = Regex("""printf\s+['"]?(\\x[0-9a-fA-F]{2})+.*\|\s*(sh|bash|eval|exec|python|perl)\b""")
+
+    // ---------- 敏感路径检测 ----------
+
+    /** 本应用包名前缀 — 允许读写 */
+    private const val APP_PACKAGE = "me.rerere.rikkahub"
+
+    /** 敏感系统路径(写操作需要拦截) */
+    private val SENSITIVE_PATHS = listOf(
+        "/system",
+        "/vendor",
+        "/boot",
+        "/proc",
+        "/dev",
+        "/etc",
+        "/lib",
+        "/lib64",
+        "/bin",
+        "/sbin",
+        "/product",
+    )
+
+    /** 检测对敏感路径的写操作, 返回原因或 null */
+    private fun sensitivePathReason(command: String): String? {
+        // 检测写操作指示: 重定向 >, >>, tee, cp/mv 目标, chmod/chown, rm, 或写动词
+        val hasWriteIndicator = WRITE_INDICATOR_REGEX.containsMatchIn(command)
+        if (!hasWriteIndicator) return null
+
+        // 提取命令中涉及的绝对路径
+        val paths = PATH_EXTRACT_REGEX.findAll(command).map { it.value }.toList()
+        for (path in paths) {
+            // 允许的路径
+            if (path.startsWith("/sdcard")) continue
+            if (path.startsWith("/data/data/$APP_PACKAGE")) continue
+            if (path.startsWith("/storage/emulated")) continue
+            if (path.startsWith("/tmp")) continue
+
+            // 检查是否命中敏感路径
+            for (sensitive in SENSITIVE_PATHS) {
+                if (path == sensitive || path.startsWith("$sensitive/")) {
+                    return "write operation targets sensitive system path: $path"
+                }
+            }
+
+            // /data/data 下非本应用的数据
+            if (path.startsWith("/data/data/") && !path.startsWith("/data/data/$APP_PACKAGE")) {
+                return "write operation targets another app's private data: $path"
+            }
+        }
+        return null
+    }
+
+    private val WRITE_INDICATOR_REGEX = Regex(
+        """(^|[^>])>{1,2}\s*[^&\s]|\b(tee|cp|mv|rm|chmod|chown|install|dd|sed\s+-i|truncate|shred)\b"""
+    )
+    private val PATH_EXTRACT_REGEX = Regex("""/(?:system|vendor|boot|proc|dev|etc|lib64?|bin|sbin|product|data/data|sdcard|storage/emulated|tmp)[^\s;|&'"<>]*""")
 }

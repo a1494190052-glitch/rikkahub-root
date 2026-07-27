@@ -22,6 +22,7 @@ private const val ROOT_SHELL_DEFAULT_TIMEOUT_MS = 30_000L
 internal fun buildRootShellTool(
     shellSessionManager: ShellSessionManager? = null,
     shellAuditLogger: ShellAuditLogger? = null,
+    shellSafetyAuditLog: ShellSafetyAuditLog? = null,
     isSubAgent: Boolean = false,
     // 用户全局审批覆盖: 返回 false = 一律自动放行; null = 默认(写操作需审批)
     approvalOverride: () -> Boolean? = { null },
@@ -77,7 +78,8 @@ internal fun buildRootShellTool(
             { json ->
                 approvalOverride() ?: run {
                     val command = json.jsonObject["command"]?.jsonPrimitive?.contentOrNull.orEmpty()
-                    ShellSafety.classify(command) == ShellRisk.WRITE
+                    // 使用深度分类: 静态 + 动态管道/编码绕过检测
+                    ShellSafety.deepClassify(command).risk == ShellRisk.WRITE
                 }
             }
         },
@@ -91,20 +93,37 @@ internal fun buildRootShellTool(
                 ?.times(1_000L)
                 ?: ROOT_SHELL_DEFAULT_TIMEOUT_MS
 
-            // 安全闸门: 高危命令直接拒绝
-            ShellSafety.blockReason(command)?.let { reason ->
+            // 安全闸门: 深度分类 — 高危命令直接拒绝
+            val classification = ShellSafety.deepClassify(command)
+            if (classification.risk == ShellRisk.BLOCKED) {
+                val reason = classification.reason ?: "blocked by safety guard"
+                val offending = classification.offendingSegment
+
+                // 审计日志: 记录被拦截的命令
+                shellSafetyAuditLog?.logBlocked(command, reason, offending)
                 shellAuditLogger?.logCompleted(
                     source = ShellAuditEntity.SOURCE_AI_ROOT,
                     command = command,
                     status = ShellAuditEntity.STATUS_BLOCKED,
-                    outputPreview = "Blocked: $reason",
+                    outputPreview = "Blocked: $reason${offending?.let { o -> " (segment: $o)" } ?: ""}",
                 )
+
+                // 向 AI 返回详细解释
                 return@Tool listOf(
                     UIMessagePart.Text(
                         buildJsonObject {
                             put("blocked", true)
                             put("reason", reason)
-                            put("message", "This command was blocked by the safety guard and was NOT executed.")
+                            if (offending != null) put("offending_segment", offending)
+                            put("message", buildString {
+                                append("This command was BLOCKED by the dynamic safety guard and was NOT executed. ")
+                                append("Reason: $reason. ")
+                                if (offending != null) {
+                                    append("The problematic sub-command is: \"$offending\". ")
+                                }
+                                append("Do NOT retry the same command. ")
+                                append("If you need to accomplish the underlying goal, use a safer alternative approach.")
+                            })
                         }.toString()
                     )
                 )
