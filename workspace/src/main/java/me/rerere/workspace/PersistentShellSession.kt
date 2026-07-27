@@ -206,6 +206,7 @@ class PersistentShellSession private constructor(
     /** 用 root 权限递归杀进程树(仅 su 会话兜底用) */
     private fun killTreeAsRoot() {
         val pid = readProcessPid() ?: return
+        val su = SuFinder.find()
         // /proc/<pid>/stat 第 4 列是 ppid; comm 列可能含空格, 用 ')' 之后的内容解析更稳
         val script = """
             killtree() {
@@ -219,7 +220,7 @@ class PersistentShellSession private constructor(
             killtree $pid
         """.trimIndent()
         runCatching {
-            val killer = Runtime.getRuntime().exec(arrayOf("su", "-c", script))
+            val killer = Runtime.getRuntime().exec(arrayOf(su, "-c", script))
             if (!killer.waitFor(2, java.util.concurrent.TimeUnit.SECONDS)) {
                 killer.destroyForcibly()
             }
@@ -337,7 +338,8 @@ class ShellSessionManager(
 
     private fun createSession(root: String?): PersistentShellSession {
         return if (root == null || isRootMode()) {
-            val builder = ProcessBuilder("su")
+            val su = SuFinder.find()
+            val builder = ProcessBuilder(su)
             val dir = initialHostDir(root)
             if (dir != null && dir.isDirectory) builder.directory(dir)
             // su 会话: destroy 杀不掉 root 子进程树, 需要 su 兜底清理, 防止 root 进程成孤儿
