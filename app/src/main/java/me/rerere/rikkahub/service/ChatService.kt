@@ -54,6 +54,7 @@ import me.rerere.rikkahub.data.ai.GenerationChunk
 import me.rerere.rikkahub.data.ai.GenerationHandler
 import me.rerere.rikkahub.data.ai.mcp.McpManager
 import me.rerere.rikkahub.data.ai.subagent.SubagentHost
+import me.rerere.rikkahub.data.ai.subagent.LruSessionCache
 import me.rerere.rikkahub.data.ai.subagent.SubagentProfile
 import me.rerere.rikkahub.data.ai.subagent.SubagentResult
 import me.rerere.rikkahub.data.ai.subagent.SubagentTranscriptStep
@@ -179,16 +180,10 @@ class ChatService(
     private val json: Json,
 ) {
     // 子代理会话存储: spawn 成功后保留上下文, 供 resume_subagent 追问; LRU 上限 20 个
-    private val subagentSessions = ConcurrentHashMap<String, SubagentHost.SubagentSessionData>()
-    private val subagentSessionsOrder = java.util.Collections.synchronizedList(mutableListOf<String>())
+    private val subagentSessions = LruSessionCache<String, SubagentHost.SubagentSessionData>(20)
 
     private fun storeSubagentSession(id: String, data: SubagentHost.SubagentSessionData) {
-        subagentSessions[id] = data
-        subagentSessionsOrder.remove(id); subagentSessionsOrder.add(id)
-        while (subagentSessionsOrder.size > 20) {
-            val oldest = subagentSessionsOrder.removeAt(0)
-            subagentSessions.remove(oldest)
-        }
+        subagentSessions.put(id, data)
     }
 
     private val workspaceReminderTransformer = WorkspaceReminderTransformer(workspaceRepository)
@@ -575,7 +570,7 @@ class ChatService(
                     }
                 },
                 resume = { sessionId, followUp ->
-                    val session = subagentSessions[sessionId]
+                    val session = subagentSessions.get(sessionId)
                     if (session == null) SubagentResult(profileName = "", summary = "", succeeded = false, error = "Subagent session not found (expired or invalid): $sessionId")
                     else {
                         val (r, newMessages) = subagentHost.resume(
