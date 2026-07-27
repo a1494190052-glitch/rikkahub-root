@@ -43,6 +43,17 @@ private val NO_APPROVAL: (JsonElement) -> Boolean = { false }
 class SubagentHost(
     private val generationHandler: GenerationHandler,
 ) {
+    /** 一次成功 spawn 后交给调用方持久化的会话数据, 供 resume 追问 */
+    data class SubagentSessionData(
+        val profile: SubagentProfile,
+        val assistant: Assistant,
+        val model: Model,
+        val messages: List<UIMessage>,
+    )
+
+    /** token 预算超支(非用户取消): 中断子代理并按失败返回 */
+    class TokenBudgetExceededException(val budget: Int) : Exception("token budget exceeded (maxTotalTokens=$budget)")
+
     suspend fun spawn(
         profile: SubagentProfile,
         task: String,
@@ -53,6 +64,7 @@ class SubagentHost(
         depth: Int = 0,
         maxDepth: Int = DEFAULT_MAX_DEPTH,
         onProgress: ((List<UIMessage>) -> Unit)? = null,
+        onSessionComplete: ((sessionId: String, session: SubagentSessionData) -> Unit)? = null,
     ): SubagentResult {
         if (depth >= maxDepth) {
             return SubagentResult(profileName = profile.name, summary = "", succeeded = false, error = "Subagent recursion depth limit reached ($maxDepth)", depth = depth)
@@ -94,12 +106,30 @@ class SubagentHost(
                 summary = run.summary
             }
 
+            // 结构化输出: schema 非空时校验最终 summary 是合法 JSON, 否则追问一次修正
+            if (profile.outputSchema.isNotBlank() && extractJson(summary) == null) {
+                run = runToCompletion(
+                    profile, settings, childModel, childAssistant, emptyList(),
+                    messages + UIMessage.user(SCHEMA_RETRY_PROMPT), onProgress,
+                )
+                steps += 1
+                totalUsage = mergeUsage(totalUsage, accumulateUsage(run.messages.drop(countedMessageCount)))
+                countedMessageCount = run.messages.size
+                messages = run.messages
+                summary = run.summary
+            }
+            val structured = profile.outputSchema.isNotBlank()
+            if (structured) summary = extractJson(summary) ?: summary
+
             val transcript = buildTranscript(messages)
+            val sessionId = Uuid.random().toString()
             val result = SubagentResult(
                 profileName = profile.name, summary = summary.ifBlank { "(subagent produced no textual summary)" },
                 succeeded = true, depth = depth, usage = totalUsage, steps = steps,
                 toolCallCount = countToolCalls(messages), transcript = transcript,
+                sessionId = sessionId,
             )
+            onSessionComplete?.invoke(sessionId, SubagentSessionData(profile, childAssistant, childModel, messages))
             logResult(result)
             result
             }.onFailure {
@@ -113,6 +143,47 @@ class SubagentHost(
             Log.w(TAG, "spawn: subagent '${profile.name}' (depth=$depth) timed out after ${profile.timeoutSeconds}s")
             SubagentResult(profileName = profile.name, summary = "", succeeded = false, error = "subagent timed out after ${profile.timeoutSeconds}s", depth = depth, usage = totalUsage, steps = steps)
         }
+    }
+
+    /**
+     * 追问一个已完成的子代理会话: 在原有消息上下文上继续一轮.
+     * 返回 (结果, 更新后的完整消息列表) — 调用方需用新消息列表更新会话存储.
+     */
+    suspend fun resume(
+        session: SubagentSessionData,
+        followUp: String,
+        settings: Settings,
+        buildChildTools: suspend (childAssistant: Assistant, depth: Int) -> List<Tool>,
+        onProgress: ((List<UIMessage>) -> Unit)? = null,
+    ): Pair<SubagentResult, List<UIMessage>> {
+        val profile = session.profile
+        val rawChildTools = runCatching { buildChildTools(session.assistant, 0) }.getOrElse { emptyList() }
+        val childTools = if (profile.excludedTools.isEmpty()) rawChildTools else rawChildTools.filter { it.name !in profile.excludedTools }
+
+        val timedResult = withTimeoutOrNull(profile.timeoutSeconds.coerceAtLeast(1) * 1000L) {
+            runCatching {
+                val run = runToCompletion(
+                    profile, settings, session.model, session.assistant, childTools,
+                    session.messages + UIMessage.user(followUp), onProgress,
+                )
+                var summary = run.summary
+                if (profile.outputSchema.isNotBlank()) summary = extractJson(summary) ?: summary
+                val result = SubagentResult(
+                    profileName = profile.name, summary = summary.ifBlank { "(subagent produced no textual summary)" },
+                    succeeded = true, depth = 0, usage = run.usage, steps = 1,
+                    toolCallCount = countToolCalls(run.messages.drop(session.messages.size)),
+                    transcript = buildTranscript(run.messages.drop(session.messages.size)),
+                )
+                result to run.messages
+            }.getOrElse {
+                if (it is CancellationException) throw it
+                SubagentResult(profileName = profile.name, summary = "", succeeded = false, error = it.message ?: it.javaClass.name) to session.messages
+            }
+        }
+        return timedResult ?: (SubagentResult(
+            profileName = profile.name, summary = "", succeeded = false,
+            error = "subagent timed out after ${profile.timeoutSeconds}s",
+        ) to session.messages)
     }
 
     private suspend fun runToCompletion(
@@ -129,6 +200,12 @@ class SubagentHost(
                 settings = settings, model = model, messages = initialMessages, assistant = assistant,
                 tools = tools, maxSteps = profile.maxSteps.coerceIn(1, 256), memories = emptyList(),
             ).onEach { chunk ->
+                if (chunk is GenerationChunk.Messages && profile.maxTotalTokens > 0) {
+                    // token 预算: 累计(含 prompt 回显)超过上限即中断, 按失败返回
+                    val used = chunk.messages.drop(initialMessages.size)
+                        .mapNotNull { it.usage }.fold(0) { acc, u -> acc + u.totalTokens }
+                    if (used > profile.maxTotalTokens) throw TokenBudgetExceededException(profile.maxTotalTokens)
+                }
                 if (chunk is GenerationChunk.Messages && onProgress != null) {
                     val now = System.currentTimeMillis()
                     val signature = chunk.messages.sumOf { msg ->
@@ -157,10 +234,16 @@ class SubagentHost(
             removeAll { it == LocalToolOption.AskUser }
         }.distinct()
 
+        // profile 未配置系统提示时给兜底, 避免子代理在零系统提示下行为不可控
+        val basePrompt = profile.systemPrompt.ifBlank { DEFAULT_CHILD_SYSTEM_PROMPT }
+        // 结构化输出: 把 schema 要求写进系统提示
+        val effectivePrompt = if (profile.outputSchema.isNotBlank()) {
+            basePrompt + "\n\nYour FINAL response must be a single valid JSON value conforming to this JSON Schema (no markdown fences, no prose around it):\n" + profile.outputSchema
+        } else basePrompt
+
         return parent.copy(
             id = Uuid.random(), name = profile.displayName,
-            // profile 未配置系统提示时给兜底, 避免子代理在零系统提示下行为不可控
-            systemPrompt = profile.systemPrompt.ifBlank { DEFAULT_CHILD_SYSTEM_PROMPT },
+            systemPrompt = effectivePrompt,
             temperature = profile.temperature ?: parent.temperature, topP = profile.topP ?: parent.topP,
             maxTokens = profile.maxTokens ?: parent.maxTokens, reasoningLevel = profile.reasoningLevel,
             contextMessageSize = 0, streamOutput = profile.streamOutput || parent.streamOutput,
@@ -208,6 +291,23 @@ class SubagentHost(
     companion object {
         private const val DEFAULT_MAX_DEPTH = 2
 
+        private const val SCHEMA_RETRY_PROMPT =
+            "Your previous response was not valid JSON. Reply with ONLY the JSON value conforming to the required schema — no markdown fences, no explanation."
+
+        /** 从模型输出中提取 JSON: 去 markdown 围栏, 截取首个 {/[ 到末尾尝试解析 */
+        fun extractJson(text: String): String? {
+            val stripped = text.trim()
+                .removePrefix("```json").removePrefix("```JSON").removePrefix("```")
+                .removeSuffix("```").trim()
+            val start = stripped.indexOfFirst { it == '{' || it == '[' }
+            if (start < 0) return null
+            val candidate = stripped.substring(start)
+            return runCatching {
+                kotlinx.serialization.json.Json.parseToJsonElement(candidate)
+                candidate
+            }.getOrNull()
+        }
+
         private const val DEFAULT_CHILD_SYSTEM_PROMPT =
             "You are a task-execution subagent. Complete the assigned task autonomously with the tools available to you, then return a concise but complete summary of what you did, what you found, and anything the parent agent needs to act on. Do not ask questions — proceed with reasonable defaults."
 
@@ -239,9 +339,16 @@ class SubagentHost(
          *    ShellSafety 判定为 WRITE/BLOCKED 的命令直接拒绝, 让子代理把写操作交还父代理.
          *    只读命令照常放行, 不影响探索类子代理工作.
          */
-        fun sandboxToolsForSubagent(tools: List<Tool>, allowHostShellWrite: Boolean = false): List<Tool> = tools.map { tool ->
+        fun sandboxToolsForSubagent(
+            tools: List<Tool>,
+            allowHostShellWrite: Boolean = false,
+            workspaceRootMode: Boolean = false,
+        ): List<Tool> = tools.map { tool ->
             val sandboxed = tool.copy(needsApproval = NO_APPROVAL)
-            if (!allowHostShellWrite && tool.name in HOST_SHELL_WRITE_GUARDED_TOOLS) {
+            // root 模式下 workspace_shell 实际是宿主机 root shell, 与 root_shell 同等防护
+            val guarded = tool.name in HOST_SHELL_WRITE_GUARDED_TOOLS ||
+                (workspaceRootMode && tool.name in WORKSPACE_SHELL_TOOLS)
+            if (!allowHostShellWrite && guarded) {
                 sandboxed.copy(execute = guardHostShellExecution(tool.name, sandboxed.execute))
             } else {
                 sandboxed
@@ -249,6 +356,7 @@ class SubagentHost(
         }
 
         private val HOST_SHELL_WRITE_GUARDED_TOOLS: Set<String> = setOf("root_shell", "pty_exec", "pty_session")
+        private val WORKSPACE_SHELL_TOOLS: Set<String> = setOf("workspace_shell", "workspace_shell_bg")
 
         private fun guardHostShellExecution(
             toolName: String,

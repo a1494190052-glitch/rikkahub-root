@@ -27,6 +27,7 @@ fun createSubagentTools(
     spawn: suspend (profileName: String, task: String, description: String) -> SubagentResult,
     askBtw: suspend (question: String) -> String,
     includeAskBtw: Boolean = true,
+    resume: (suspend (sessionId: String, followUp: String) -> SubagentResult)? = null,
 ): List<Tool> {
     if (profiles.isEmpty()) return emptyList()
 
@@ -47,6 +48,7 @@ When to USE: research needing more than 2-3 searches/reads, multi-step tasks wit
 When to SKIP: single file read, one quick search, answering from knowledge you already have.
 
 Parallel execution: multiple spawn_subagent calls in the SAME response run concurrently.
+Follow-ups: a successful spawn returns a session_id — use resume_subagent to ask the SAME subagent a follow-up without redoing its work.
 
 Available profiles:
 $profileListText
@@ -109,6 +111,7 @@ $profileListText
                 put("depth", JsonPrimitive(result.depth))
                 put("steps", JsonPrimitive(result.steps))
                 put("tool_calls", JsonPrimitive(result.toolCallCount))
+                result.sessionId?.let { put("session_id", JsonPrimitive(it)) }
             }
             val transcriptMetadata = if (result.transcript.isNotEmpty()) {
                 buildJsonObject {
@@ -144,6 +147,39 @@ $profileListText
 
     val tools = mutableListOf(spawnTool)
     if (includeAskBtw) tools.add(btwTool)
+    if (resume != null) {
+        tools += Tool(
+            name = "resume_subagent",
+            description = "Ask a follow-up question to a previously spawned subagent session, reusing its full context (findings, files read, work done). Cheaper than spawning a new subagent for related follow-ups. Get session_id from a successful spawn_subagent result.",
+            parameters = {
+                InputSchema.Obj(
+                    properties = buildJsonObject {
+                        put("session_id", buildJsonObject {
+                            put("type", "string")
+                            put("description", "The session_id returned by a previous successful spawn_subagent call")
+                        })
+                        put("follow_up", buildJsonObject {
+                            put("type", "string")
+                            put("description", "The follow-up question or additional instruction")
+                        })
+                    },
+                    required = listOf("session_id", "follow_up"),
+                )
+            },
+            execute = { args ->
+                val params = args.jsonObject
+                val sessionId = params["session_id"]?.jsonPrimitive?.contentOrNull ?: error("session_id is required")
+                val followUp = params["follow_up"]?.jsonPrimitive?.contentOrNull ?: error("follow_up is required")
+                val result = resume(sessionId, followUp)
+                listOf(UIMessagePart.Text(buildJsonObject {
+                    put("profile_name", JsonPrimitive(result.profileName))
+                    put("succeeded", JsonPrimitive(result.succeeded))
+                    if (!result.error.isNullOrBlank()) put("error", JsonPrimitive(result.error))
+                    put("summary", JsonPrimitive(result.summary))
+                }.toString()))
+            },
+        )
+    }
     return tools
 }
 
@@ -186,6 +222,14 @@ fun createManageSubagentTool(
                 put("timeout_seconds", buildJsonObject {
                     put("type", "integer")
                     put("description", "Max wall-clock seconds per spawn before the subagent is failed as timed out. Default 600.")
+                })
+                put("max_total_tokens", buildJsonObject {
+                    put("type", "integer")
+                    put("description", "Token budget per spawn; the subagent is aborted and failed when exceeded. 0/omit = unlimited.")
+                })
+                put("output_schema", buildJsonObject {
+                    put("type", "string")
+                    put("description", "JSON Schema string. When set, the subagent's final answer must be valid JSON matching it (one auto-retry on invalid output). Empty string clears.")
                 })
             },
             required = listOf("action"),
@@ -236,5 +280,7 @@ private fun SubagentProfile.applyPatch(params: JsonObject): SubagentProfile {
         excludedTools = optStrSet("excluded_tools") ?: excludedTools,
         allowHostShellWrite = bool("allow_host_shell_write") ?: allowHostShellWrite,
         timeoutSeconds = int("timeout_seconds") ?: timeoutSeconds,
+        maxTotalTokens = int("max_total_tokens") ?: maxTotalTokens,
+        outputSchema = if ("output_schema" in params) str("output_schema").orEmpty() else outputSchema,
     )
 }

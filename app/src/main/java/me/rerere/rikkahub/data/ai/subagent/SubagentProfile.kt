@@ -33,6 +33,13 @@ data class SubagentProfile(
     val allowHostShellWrite: Boolean = false,
     /** 子代理单次 spawn 的总时长上限(秒), 超时按失败返回, 防止失控烧 token */
     val timeoutSeconds: Int = DEFAULT_TIMEOUT_SECONDS,
+    /** token 预算: 累计 total tokens 超过即中断, 按失败返回; 0 = 不限 */
+    val maxTotalTokens: Int = 0,
+    /**
+     * 结构化返回: 非空时要求子代理最终输出匹配该 JSON Schema 的 JSON.
+     * 校验失败会自动追问一次要求修正.
+     */
+    val outputSchema: String = "",
     val enableMemory: Boolean = false,
     val summaryMinLength: Int = DEFAULT_SUMMARY_MIN_LENGTH,
     val summaryContinuationAttempts: Int = DEFAULT_SUMMARY_CONTINUATION_ATTEMPTS,
@@ -102,6 +109,8 @@ data class SubagentResult(
     @SerialName("steps") val steps: Int = 0,
     @SerialName("tool_call_count") val toolCallCount: Int = 0,
     @SerialName("transcript") val transcript: List<SubagentTranscriptStep> = emptyList(),
+    /** 会话 id, 可用 resume_subagent 追问(仅成功的 spawn 返回) */
+    @SerialName("session_id") val sessionId: String? = null,
 )
 
 @Serializable

@@ -178,6 +178,19 @@ class ChatService(
     private val subagentHost: SubagentHost,
     private val json: Json,
 ) {
+    // 子代理会话存储: spawn 成功后保留上下文, 供 resume_subagent 追问; LRU 上限 20 个
+    private val subagentSessions = ConcurrentHashMap<String, SubagentHost.SubagentSessionData>()
+    private val subagentSessionsOrder = java.util.Collections.synchronizedList(mutableListOf<String>())
+
+    private fun storeSubagentSession(id: String, data: SubagentHost.SubagentSessionData) {
+        subagentSessions[id] = data
+        subagentSessionsOrder.remove(id); subagentSessionsOrder.add(id)
+        while (subagentSessionsOrder.size > 20) {
+            val oldest = subagentSessionsOrder.removeAt(0)
+            subagentSessions.remove(oldest)
+        }
+    }
+
     private val workspaceReminderTransformer = WorkspaceReminderTransformer(workspaceRepository)
 
     private val sessions = ConcurrentHashMap<Uuid, ConversationSession>()
@@ -538,7 +551,7 @@ class ChatService(
         val result = mutableListOf<Tool>()
 
         if (includeBase) {
-            result += SubagentHost.sandboxToolsForSubagent(buildSubagentBaseTools(assistant, settings, workspaceCwd, mcpServerIds, allowHostShellWrite), allowHostShellWrite)
+            result += SubagentHost.sandboxToolsForSubagent(buildSubagentBaseTools(assistant, settings, workspaceCwd, mcpServerIds, allowHostShellWrite), allowHostShellWrite, workspaceRootMode = workspaceRepository.isRootMode())
         }
 
         // maxDepth 语义 = 允许嵌套的子代理层数: depth 从 0 起, depth < maxDepth 时允许再 spawn
@@ -557,7 +570,21 @@ class ChatService(
                             buildChildTools = { child, d -> buildSubagentTools(child, settings, workspaceCwd, d, maxDepth, includeBase = true, mcpServerIds = profile.mcpServerIds, allowHostShellWrite = profile.allowHostShellWrite) },
                             depth = depth + 1, maxDepth = maxDepth,
                             onProgress = if (conversationId != null) { subMessages -> updateSubagentProgress(conversationId, null, profileName, subMessages) } else null,
+                            onSessionComplete = { sessionId, session -> storeSubagentSession(sessionId, session) },
                         )
+                    }
+                },
+                resume = { sessionId, followUp ->
+                    val session = subagentSessions[sessionId]
+                    if (session == null) SubagentResult(profileName = "", summary = "", succeeded = false, error = "Subagent session not found (expired or invalid): $sessionId")
+                    else {
+                        val (r, newMessages) = subagentHost.resume(
+                            session = session, followUp = followUp, settings = settings,
+                            buildChildTools = { child, d -> buildSubagentTools(child, settings, workspaceCwd, d, maxDepth, includeBase = true, mcpServerIds = session.profile.mcpServerIds, allowHostShellWrite = session.profile.allowHostShellWrite) },
+                            onProgress = if (conversationId != null) { subMessages -> updateSubagentProgress(conversationId, null, session.profile.name, subMessages) } else null,
+                        )
+                        if (r.succeeded) storeSubagentSession(sessionId, session.copy(messages = newMessages))
+                        r
                     }
                 },
                 askBtw = { question ->
@@ -635,8 +662,24 @@ class ChatService(
                 if (lastAssistantIndex < 0) return@updateConversationState conversation
                 val updatedMessages = messages.mapIndexed { index, message ->
                     if (index != lastAssistantIndex) return@mapIndexed message
-                    val matchesTool: (UIMessagePart.Tool) -> Boolean = { part -> part.toolName == "spawn_subagent" && (!part.isExecuted || isStreamingSubagent(part)) && (toolCallId == null || part.toolCallId == toolCallId) }
+                    // 并行 spawn 进度路由: 优先精确 toolCallId; 否则按 streaming metadata 里的 profile 匹配;
+                    // 还未写入 metadata 的 spawn 部件只认领第一个, 避免多个并行子代理互相覆盖进度
+                    var claimed = false
+                    val matchesTool: (UIMessagePart.Tool) -> Boolean = matches@{ part ->
+                        if (claimed || part.toolName != "spawn_subagent") return@matches false
+                        if (toolCallId != null) return@matches part.toolCallId == toolCallId
+                        val streamingProfile = part.output.filterIsInstance<UIMessagePart.Text>().firstOrNull()
+                            ?.metadata?.get("subagent_profile")?.jsonPrimitive?.contentOrNull
+                        val hit = when {
+                            isStreamingSubagent(part) -> streamingProfile == profileName
+                            !part.isExecuted -> streamingProfile == null || streamingProfile == profileName
+                            else -> false
+                        }
+                        if (hit) claimed = true
+                        hit
+                    }
                     if (!message.parts.any { it is UIMessagePart.Tool && matchesTool(it) }) return@mapIndexed message
+                    claimed = false
                     message.copy(parts = message.parts.map { part -> if (part is UIMessagePart.Tool && matchesTool(part)) part.copy(output = listOf(partialOutput)) else part })
                 }
                 conversation.updateCurrentMessages(updatedMessages)
