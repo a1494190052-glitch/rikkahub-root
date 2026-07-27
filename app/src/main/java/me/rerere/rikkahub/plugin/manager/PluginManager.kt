@@ -12,24 +12,15 @@ import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
 import me.rerere.rikkahub.plugin.data.PluginDataStore
 import me.rerere.rikkahub.plugin.loader.PluginLoader
-import me.rerere.rikkahub.plugin.loader.PluginLoaderStats
 import me.rerere.rikkahub.plugin.model.PluginInfo
 import me.rerere.rikkahub.plugin.model.PluginManifest
 import me.rerere.rikkahub.plugin.scanner.PluginScanner
 import java.io.File
-import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.atomic.AtomicInteger
-import java.util.concurrent.atomic.AtomicLong
 
 /**
  * Central plugin lifecycle manager.
  * Handles: scan → import → load → execute → unload
- *
- * Features:
- * - CompletableDeferred for initialization race resolution
- * - Health check: consecutive timeouts auto-disable plugins (threshold = 3)
- * - Concurrent call statistics for UI display
- * - Suspend getTools() for coroutine integration
+ * Uses CompletableDeferred to resolve initialization race conditions.
  */
 class PluginManager(
     private val context: Context,
@@ -40,7 +31,6 @@ class PluginManager(
         private const val TAG = "PluginManager"
         private const val PREFS_NAME = "plugin_manager_prefs"
         private const val KEY_DISABLED_PLUGINS = "disabled_plugins"
-        private const val HEALTH_CHECK_THRESHOLD = 3 // consecutive timeouts before auto-disable
     }
 
     private val scanner = PluginScanner(context, json)
@@ -58,20 +48,6 @@ class PluginManager(
         get() = prefs.getStringSet(KEY_DISABLED_PLUGINS, emptySet())?.toMutableSet() ?: mutableSetOf()
 
     private var manifests: Map<String, Pair<File, PluginManifest>> = emptyMap()
-
-    // --- Health check state ---
-    // Tracks consecutive timeout count per plugin
-    private val consecutiveTimeouts = ConcurrentHashMap<String, AtomicInteger>()
-    // Set of auto-disabled plugin IDs (due to health check failures)
-    private val autoDisabledPlugins = ConcurrentHashMap.newKeySet<String>()
-
-    // --- Call statistics ---
-    private val totalToolCalls = AtomicLong(0)
-    private val successfulCalls = AtomicLong(0)
-    private val failedCalls = AtomicLong(0)
-    private val timedOutCalls = AtomicLong(0)
-    private val _stats = MutableStateFlow(PluginCallStats())
-    val stats: StateFlow<PluginCallStats> = _stats.asStateFlow()
 
     init {
         scope.launch(Dispatchers.IO) {
@@ -96,7 +72,7 @@ class PluginManager(
         val pluginInfos = mutableListOf<PluginInfo>()
 
         for ((dir, manifest) in scanned) {
-            val enabled = manifest.id !in disabled && manifest.id !in autoDisabledPlugins
+            val enabled = manifest.id !in disabled
             if (enabled) {
                 try {
                     val config = loadConfig(manifest)
@@ -104,8 +80,6 @@ class PluginManager(
                     pluginInfos.add(
                         PluginInfo.fromManifest(manifest, enabled = true, loaded = true, configValues = config)
                     )
-                    // Reset health on successful load
-                    consecutiveTimeouts.remove(manifest.id)
                 } catch (e: Exception) {
                     Log.e(TAG, "Failed to load plugin: ${manifest.id}", e)
                     pluginInfos.add(
@@ -147,13 +121,11 @@ class PluginManager(
     fun togglePlugin(pluginId: String) {
         scope.launch(Dispatchers.IO) {
             val disabled = disabledPluginIds
-            val currentlyDisabled = pluginId in disabled || pluginId in autoDisabledPlugins
+            val currentlyDisabled = pluginId in disabled
 
             if (currentlyDisabled) {
-                // Enable (also clears auto-disable)
+                // Enable
                 disabled.remove(pluginId)
-                autoDisabledPlugins.remove(pluginId)
-                consecutiveTimeouts.remove(pluginId)
                 prefs.edit().putStringSet(KEY_DISABLED_PLUGINS, disabled).apply()
 
                 // Load the plugin
@@ -202,8 +174,6 @@ class PluginManager(
 
             val disabled = disabledPluginIds
             disabled.remove(pluginId)
-            autoDisabledPlugins.remove(pluginId)
-            consecutiveTimeouts.remove(pluginId)
             prefs.edit().putStringSet(KEY_DISABLED_PLUGINS, disabled).apply()
 
             refreshPluginList()
@@ -215,16 +185,17 @@ class PluginManager(
      */
     fun updateConfig(pluginId: String, config: Map<String, String>) {
         scope.launch(Dispatchers.IO) {
+            // Save config
             saveConfig(pluginId, config)
 
+            // Reload plugin with new config
             val entry = manifests[pluginId]
             if (entry != null) {
                 val (dir, manifest) = entry
                 val disabled = disabledPluginIds
-                if (pluginId !in disabled && pluginId !in autoDisabledPlugins) {
+                if (pluginId !in disabled) {
                     try {
                         loader.loadPlugin(dir, manifest, config)
-                        consecutiveTimeouts.remove(pluginId)
                     } catch (e: Exception) {
                         Log.e(TAG, "Failed to reload plugin after config update: $pluginId", e)
                     }
@@ -236,8 +207,7 @@ class PluginManager(
     }
 
     /**
-     * Get all plugin tools (suspend - waits for initialization).
-     * No runBlocking - properly integrates with coroutine callers.
+     * Get all plugin tools (waits for initialization).
      */
     suspend fun getTools(): List<me.rerere.ai.core.Tool> {
         _initialized.await()
@@ -252,65 +222,6 @@ class PluginManager(
             }
         }
     }
-
-    /**
-     * Record a tool call result for health checking and statistics.
-     * Called by the tool execution layer after each plugin tool invocation.
-     *
-     * @param pluginId The plugin that was called
-     * @param timedOut Whether the call timed out
-     * @param success Whether the call succeeded (no error in result)
-     */
-    fun recordToolCallResult(pluginId: String, timedOut: Boolean, success: Boolean) {
-        totalToolCalls.incrementAndGet()
-
-        if (timedOut) {
-            timedOutCalls.incrementAndGet()
-            // Health check: increment consecutive timeout counter
-            val counter = consecutiveTimeouts.getOrPut(pluginId) { AtomicInteger(0) }
-            val count = counter.incrementAndGet()
-
-            if (count >= HEALTH_CHECK_THRESHOLD) {
-                Log.w(TAG, "Plugin $pluginId auto-disabled: $count consecutive timeouts")
-                autoDisabledPlugins.add(pluginId)
-                loader.unloadPlugin(pluginId)
-                refreshPluginList()
-            }
-        } else if (success) {
-            successfulCalls.incrementAndGet()
-            // Reset consecutive timeout counter on success
-            consecutiveTimeouts[pluginId]?.set(0)
-        } else {
-            failedCalls.incrementAndGet()
-            // Non-timeout failures don't affect health check
-            consecutiveTimeouts[pluginId]?.set(0)
-        }
-
-        updateStats()
-    }
-
-    /**
-     * Update the stats StateFlow for UI observation.
-     */
-    private fun updateStats() {
-        val loaderStats = loader.getStats()
-        _stats.value = PluginCallStats(
-            totalCalls = totalToolCalls.get(),
-            successfulCalls = successfulCalls.get(),
-            failedCalls = failedCalls.get(),
-            timedOutCalls = timedOutCalls.get(),
-            activeCalls = loaderStats.activeCalls,
-            poolSize = loaderStats.poolSize,
-            activeThreads = loaderStats.activeThreads,
-            queueSize = loaderStats.queueSize,
-            autoDisabledPlugins = autoDisabledPlugins.toSet(),
-        )
-    }
-
-    /**
-     * Get current call statistics.
-     */
-    fun getCallStats(): PluginCallStats = _stats.value
 
     /**
      * Get the plugin loader for direct tool calls.
@@ -330,32 +241,18 @@ class PluginManager(
     }
 
     /**
-     * Check if a plugin is auto-disabled due to health check failures.
-     */
-    fun isAutoDisabled(pluginId: String): Boolean = pluginId in autoDisabledPlugins
-
-    /**
-     * Manually reset health check state for a plugin (re-enable after auto-disable).
-     */
-    fun resetHealth(pluginId: String) {
-        consecutiveTimeouts.remove(pluginId)
-        autoDisabledPlugins.remove(pluginId)
-    }
-
-    /**
      * Refresh the plugin info list from current state.
      */
     private fun refreshPluginList() {
         val disabled = disabledPluginIds
         val pluginInfos = manifests.map { (id, entry) ->
             val (_, manifest) = entry
-            val enabled = id !in disabled && id !in autoDisabledPlugins
+            val enabled = id !in disabled
             val loaded = loader.isLoaded(id)
             val config = loadConfig(manifest)
             PluginInfo.fromManifest(manifest, enabled = enabled, loaded = loaded, configValues = config)
         }
         _plugins.value = pluginInfos
-        updateStats()
     }
 
     /**
@@ -365,6 +262,7 @@ class PluginManager(
         val configPrefs = context.getSharedPreferences("plugin_config_${manifest.id}", Context.MODE_PRIVATE)
         val config = mutableMapOf<String, String>()
 
+        // Start with defaults from manifest
         for (item in manifest.config) {
             config[item.key] = configPrefs.getString(item.key, item.default) ?: item.default
         }
@@ -389,18 +287,3 @@ class PluginManager(
         loader.destroy()
     }
 }
-
-/**
- * Plugin call statistics for UI display.
- */
-data class PluginCallStats(
-    val totalCalls: Long = 0,
-    val successfulCalls: Long = 0,
-    val failedCalls: Long = 0,
-    val timedOutCalls: Long = 0,
-    val activeCalls: Int = 0,
-    val poolSize: Int = 0,
-    val activeThreads: Int = 0,
-    val queueSize: Int = 0,
-    val autoDisabledPlugins: Set<String> = emptySet(),
-)
