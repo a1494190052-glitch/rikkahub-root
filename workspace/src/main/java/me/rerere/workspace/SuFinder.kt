@@ -1,17 +1,20 @@
 package me.rerere.workspace
 
+import android.util.Log
 import java.io.File
+
+private const val TAG = "SuFinder"
 
 /**
  * 查找设备上 su 二进制文件的绝对路径。
  * 支持 Magisk / KernelSU / APatch / SuperSU 等常见 root 方案。
  *
  * 策略：
- * 1. 尝试已知路径（仅 exists() 检查）
+ * 1. 尝试已知路径（仅 exists() 检查，不查 canExecute — SELinux 可能阻止）
  * 2. 如果都找不到，返回 "su"（让 /system/bin/sh 的 PATH 来解析）
  *
- * 注意：不检查 canExecute()，因为 SELinux 可能阻止。
- * 即使 exists() 全部失败，PersistentShellSession 会通过 sh -c "su" 兜底。
+ * 自愈机制：若缓存的绝对路径在二次校验时已失效（如 root 方案切换），
+ * 会自动 invalidate 缓存，下次调用重新扫描，而不是永远走兜底。
  */
 object SuFinder {
 
@@ -43,21 +46,26 @@ object SuFinder {
                 try { File(path).exists() } catch (_: Exception) { false }
             } ?: "su"
             cachedPath = found
+            Log.i(TAG, "su resolved to: $found")
             return found
         }
     }
 
     /**
      * 构建启动 root shell 的 ProcessBuilder。
-     * 如果找到了 su 绝对路径，直接用 ProcessBuilder(suPath)。
-     * 如果没找到，用 /system/bin/sh -c "exec su" 让 shell PATH 解析。
+     * 如果找到了 su 绝对路径且仍然有效，直接用 ProcessBuilder(suPath)。
+     * 如果没找到或已失效，用 /system/bin/sh -c "exec su" 让 shell PATH 解析，
+     * 并清除缓存以便下次重新扫描。
      */
     fun createSuProcessBuilder(): ProcessBuilder {
         val su = find()
         return if (su != "su" && File(su).exists()) {
             ProcessBuilder(su)
         } else {
-            // 兜底：通过 sh 启动 su（sh 的 PATH 包含 Magisk 挂载的目录）
+            if (su != "su") {
+                Log.w(TAG, "cached su path '$su' no longer valid, invalidating cache")
+                invalidate()
+            }
             ProcessBuilder("/system/bin/sh", "-c", "exec su")
         }
     }
@@ -70,13 +78,22 @@ object SuFinder {
         return if (su != "su" && File(su).exists()) {
             ProcessBuilder(su, "-c", command)
         } else {
+            if (su != "su") {
+                Log.w(TAG, "cached su path '$su' no longer valid, invalidating cache")
+                invalidate()
+            }
             ProcessBuilder("/system/bin/sh", "-c", "su -c ${shellQuote(command)}")
         }
     }
 
     private fun shellQuote(s: String): String = "'" + s.replace("'", "'\\''") + "'"
 
+    /**
+     * 强制重新检测（root 方案变更、或缓存路径失效时调用）。
+     */
     fun invalidate() {
-        cachedPath = null
+        synchronized(this) {
+            cachedPath = null
+        }
     }
 }
