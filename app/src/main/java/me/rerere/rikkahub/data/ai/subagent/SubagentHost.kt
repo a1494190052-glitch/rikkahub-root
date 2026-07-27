@@ -24,6 +24,8 @@ import me.rerere.ai.ui.UIMessagePart
 import me.rerere.rikkahub.data.ai.GenerationChunk
 import me.rerere.rikkahub.data.ai.GenerationHandler
 import me.rerere.rikkahub.data.ai.tools.local.LocalToolOption
+import me.rerere.rikkahub.data.ai.tools.local.ShellRisk
+import me.rerere.rikkahub.data.ai.tools.local.ShellSafety
 import me.rerere.rikkahub.data.datastore.Settings
 import me.rerere.rikkahub.data.datastore.findModelById
 import me.rerere.rikkahub.data.model.Assistant
@@ -338,6 +340,8 @@ class SubagentHost(
          *  - 但宿主 shell 类工具(root_shell / pty_exec / pty_session)额外包一层执行期闸门:
          *    ShellSafety 判定为 WRITE/BLOCKED 的命令直接拒绝, 让子代理把写操作交还父代理.
          *    只读命令照常放行, 不影响探索类子代理工作.
+         *
+         * v2: 增强版 — 使用 classifyDeep 进行多层检测, 结构化警告, 审计日志
          */
         fun sandboxToolsForSubagent(
             tools: List<Tool>,
@@ -358,12 +362,21 @@ class SubagentHost(
         private val HOST_SHELL_WRITE_GUARDED_TOOLS: Set<String> = setOf("root_shell", "pty_exec", "pty_session")
         private val WORKSPACE_SHELL_TOOLS: Set<String> = setOf("workspace_shell", "workspace_shell_bg")
 
+        /**
+         * 第三层: 运行时拦截 — 增强版
+         *  - 命令执行前记录审计日志 (Android Log)
+         *  - 使用 classifyDeep 进行多层检测
+         *  - BLOCKED: 结构化警告 + 绕过指标
+         *  - WRITE: 观察模式, 记录但不执行, 返回 dry-run 结果
+         *  - READ_ONLY: 放行
+         */
         private fun guardHostShellExecution(
             toolName: String,
             original: suspend (JsonElement) -> List<UIMessagePart>,
         ): suspend (JsonElement) -> List<UIMessagePart> = { args ->
             if (toolName == "pty_exec" || toolName == "pty_session") {
                 // pty 交互命令无法静态审计, 子代理内一律拒绝
+                Log.w(TAG, "[ShellGuard] BLOCKED pty session in subagent: tool=$toolName")
                 listOf(
                     UIMessagePart.Text(
                         """{"blocked": true, "reason": "interactive pty sessions are not allowed in a subagent", "message": "Interactive terminal sessions cannot be audited inside a subagent and were NOT started. Report the needed interaction in your summary so the parent agent can run it with user approval."}"""
@@ -371,16 +384,42 @@ class SubagentHost(
                 )
             } else {
                 val command = args.jsonObject["command"]?.jsonPrimitive?.contentOrNull.orEmpty()
-                if (me.rerere.rikkahub.data.ai.tools.local.ShellSafety.classify(command) !=
-                    me.rerere.rikkahub.data.ai.tools.local.ShellRisk.READ_ONLY
-                ) {
-                    listOf(
-                        UIMessagePart.Text(
-                            """{"blocked": true, "reason": "write/blocked host shell commands are not allowed in a subagent", "message": "This command was classified as WRITE or BLOCKED and was NOT executed. Subagents may only run read-only host shell commands. Report the required write operation in your summary so the parent agent can execute it with user approval."}"""
+
+                // 审计日志: 记录所有子代理 shell 命令
+                Log.i(TAG, "[ShellGuard] audit: tool=$toolName command=${command.take(200)}")
+
+                // 使用深度分类
+                val deepResult = ShellSafety.classifyDeep(command)
+
+                when (deepResult.overall) {
+                    ShellRisk.BLOCKED -> {
+                        // 结构化警告: 包含拒绝原因和绕过指标
+                        Log.w(TAG, "[ShellGuard] BLOCKED: tool=$toolName reason=${deepResult.blockReason} indicators=${deepResult.bypassIndicators}")
+                        val indicatorsJson = deepResult.bypassIndicators.joinToString("", "[", "]") { "\"$it\"" }
+                        val segmentsJson = deepResult.segments.joinToString("", "[", "]") { seg ->
+                            """{"command": "${seg.command.take(100).replace("\"", "\\\"")}", "risk": "${seg.risk}", "reason": "${(seg.reason ?: "").replace("\"", "\\\"")}"}"""
+                        }
+                        listOf(
+                            UIMessagePart.Text(
+                                """{"blocked": true, "risk": "BLOCKED", "reason": "${(deepResult.blockReason ?: "high-risk command").replace("\"", "\\\"")}", "bypass_indicators": $indicatorsJson, "segments": $segmentsJson, "message": "This command was classified as BLOCKED (destructive/dangerous) and was NOT executed. The dynamic multi-layer guard detected: ${deepResult.blockReason ?: "high-risk pattern"}. Report this operation in your summary so the parent agent can evaluate it with user approval."}"""
+                            )
                         )
-                    )
-                } else {
-                    original(args)
+                    }
+                    ShellRisk.WRITE -> {
+                        // 观察模式: 记录但不执行, 返回 dry-run 结果
+                        Log.w(TAG, "[ShellGuard] DRY-RUN (WRITE): tool=$toolName command=${command.take(200)} indicators=${deepResult.bypassIndicators}")
+                        val indicatorsJson = deepResult.bypassIndicators.joinToString("", "[", "]") { "\"$it\"" }
+                        listOf(
+                            UIMessagePart.Text(
+                                """{"blocked": true, "risk": "WRITE", "dry_run": true, "reason": "write/mutating commands are not allowed in a subagent without explicit permission", "bypass_indicators": $indicatorsJson, "message": "This command was classified as WRITE (mutating) and was NOT executed (observation mode). Subagents may only run read-only host shell commands. Report the required write operation in your summary so the parent agent can execute it with user approval."}"""
+                            )
+                        )
+                    }
+                    ShellRisk.READ_ONLY -> {
+                        // 放行: 只读命令直接执行
+                        Log.d(TAG, "[ShellGuard] ALLOWED (READ_ONLY): tool=$toolName command=${command.take(100)}")
+                        original(args)
+                    }
                 }
             }
         }
