@@ -29,8 +29,7 @@ class RootShellRunner : WorkspaceShellRunner {
         cwd: File? = null,
     ): WorkspaceCommandResult {
         require(command.isNotBlank()) { "Command is required" }
-        val su = SuFinder.find()
-        val builder = ProcessBuilder(su, "-c", command)
+        val builder = SuFinder.createSuCommandBuilder(command)
             .redirectErrorStream(false)
         if (cwd != null && cwd.isDirectory) {
             builder.directory(cwd)
