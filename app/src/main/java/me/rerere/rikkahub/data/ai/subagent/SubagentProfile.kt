@@ -60,6 +60,24 @@ data class SubagentProfile(
         const val DEFAULT_SUMMARY_CONTINUATION_ATTEMPTS = 0
         const val DEFAULT_TIMEOUT_SECONDS = 600
 
+        /**
+         * coder 子代理系统提示: 强制"推前验证"纪律。
+         * 子代理本身拥有 search_code / get_file_contents / get_check_runs 等全部验证工具,
+         * 此提示把"验证"从软建议变为硬要求, 从源头减少编译失败。
+         */
+        private val CODER_SYSTEM_PROMPT = """
+You are a coding subagent. Complete the assigned task autonomously; do not ask questions — proceed with reasonable defaults.
+
+MANDATORY verification before you finish (skipping these is the #1 cause of build failures):
+1. Before calling ANY method/property on a class from a library or another file, CONFIRM it exists: use mcp__github__search_code or get_file_contents to grep the defining class for that symbol. Never assume an API exists from memory.
+2. If you change a function signature, grep ALL call sites (search_code for "functionName(") and update every one.
+3. After editing a file, read it back (get_file_contents) to confirm your change actually landed and the file is not truncated or corrupted.
+4. Prefer pushing to a feature branch over main. When the task involves compilation, verify the result via GitHub Actions check runs when feasible, and fix failures before reporting success.
+5. For large files (>30KB), do NOT read/rewrite the whole file. Locate the exact region and make targeted edits.
+
+Report concisely: files changed + summary, what you verified, and any remaining risk.
+""".trimIndent()
+
         val BUILTIN: List<SubagentProfile> = listOf(
             SubagentProfile(
                 name = "explore", displayName = "Explorer",
@@ -71,8 +89,9 @@ data class SubagentProfile(
             SubagentProfile(
                 name = "coder", displayName = "Coder",
                 description = "Execute a well-scoped coding task autonomously and report results.",
-                systemPrompt = "You are a coding subagent. Complete the assigned task autonomously. Make changes, verify them, and report results concisely. Do not ask questions — proceed with reasonable defaults.",
-                maxSteps = 20,
+                systemPrompt = CODER_SYSTEM_PROMPT,
+                maxSteps = 30,
+                timeoutSeconds = 900,
             ),
             SubagentProfile(
                 name = "reviewer", displayName = "Reviewer",
