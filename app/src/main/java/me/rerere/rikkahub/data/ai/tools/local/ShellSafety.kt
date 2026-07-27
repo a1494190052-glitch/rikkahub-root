@@ -240,38 +240,54 @@ object ShellSafety {
      * 深度分类: 在静态分类基础上增加管道解析、编码绕过检测、敏感路径检测。
      * 纯字符串解析, 无 IO, 设计目标 < 5ms。
      */
-    fun deepClassify(command: String): DeepClassification {
-        // 1. 快速路径: 静态 BLOCKED 直接返回
+    /**
+     * 深度分类。
+     * @param strict true=子代理模式(执行解释器/编码绕过一律 BLOCKED);
+     *               false=主代理模式(这些降级为 WRITE, 交给审批机制, 用户可放行)。
+     * 灾难级操作(删根/写块设备/fork bomb/删 root)与敏感系统路径写入在两种模式下都 BLOCKED。
+     */
+    fun deepClassify(command: String, strict: Boolean = false): DeepClassification {
+        // 1. 灾难级: 两种模式都硬拒绝
         blockReason(command)?.let { reason ->
             return DeepClassification(ShellRisk.BLOCKED, reason = reason)
         }
 
-        // 2. 解析所有子命令(管道、子 shell、分号、&&、||)
-        val subCommands = parseSubCommands(command)
-
-        // 3. 检测执行命令出现在管道/子命令中
-        for (sub in subCommands) {
-            val cmd = extractCommandName(sub)
-            if (cmd in EXECUTION_COMMANDS) {
-                return DeepClassification(
-                    ShellRisk.BLOCKED,
-                    reason = "execution interpreter '$cmd' detected in pipeline/sub-command",
-                    offendingSegment = sub.trim(),
-                )
-            }
-        }
-
-        // 4. 编码绕过检测
-        encodingBypassReason(command)?.let { reason ->
-            return DeepClassification(ShellRisk.BLOCKED, reason = reason)
-        }
-
-        // 5. 敏感路径写操作检测
+        // 2. 敏感系统路径写入: 两种模式都硬拒绝(保护设备, 即使经过 python3 包装)
         sensitivePathReason(command)?.let { reason ->
             return DeepClassification(ShellRisk.BLOCKED, reason = reason)
         }
 
-        // 6. 回退到静态分类
+        // 3. 执行解释器(python3/sh/eval 等): strict→BLOCKED, relaxed→WRITE(可审批)
+        val subCommands = parseSubCommands(command)
+        for (sub in subCommands) {
+            val cmd = extractCommandName(sub)
+            if (cmd in EXECUTION_COMMANDS) {
+                return if (strict) {
+                    DeepClassification(
+                        ShellRisk.BLOCKED,
+                        reason = "execution interpreter '$cmd' not allowed in subagent",
+                        offendingSegment = sub.trim(),
+                    )
+                } else {
+                    DeepClassification(
+                        ShellRisk.WRITE,
+                        reason = "execution interpreter '$cmd' (main agent: approval-gated)",
+                        offendingSegment = sub.trim(),
+                    )
+                }
+            }
+        }
+
+        // 4. 编码绕过(base64|sh 等): strict→BLOCKED, relaxed→WRITE(可审批)
+        encodingBypassReason(command)?.let { reason ->
+            return if (strict) {
+                DeepClassification(ShellRisk.BLOCKED, reason = reason)
+            } else {
+                DeepClassification(ShellRisk.WRITE, reason = "$reason (main agent: approval-gated)")
+            }
+        }
+
+        // 5. 回退到静态分类
         val static = classify(command)
         return when (static) {
             ShellRisk.BLOCKED -> DeepClassification(ShellRisk.BLOCKED, reason = "blocked by static pattern")
