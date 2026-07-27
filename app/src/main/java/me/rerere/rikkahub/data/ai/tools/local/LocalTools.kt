@@ -46,7 +46,7 @@ class LocalTools(
     private fun toolApprovalOverride(name: String): Boolean? =
         settingsStore.settingsFlow.value.toolApprovalOverrides[name]
 
-    val rootShellTool by lazy { buildRootShellTool(shellSessionManager, shellAuditLogger, isSubAgent) { toolApprovalOverride("root_shell") } }
+    val rootShellTool by lazy { buildRootShellTool(shellSessionManager, shellAuditLogger, null, isSubAgent) { toolApprovalOverride("root_shell") } }
     val ptyExecTool by lazy { buildPtyExecTool(context, shellAuditLogger) { toolApprovalOverride("pty_exec") } }
     val ptySessionTool by lazy { ptySessionManager?.let { buildPtySessionTool(context, it, shellAuditLogger) { toolApprovalOverride("pty_session") } } }
     val mcpManagerTool by lazy { buildMcpManagerTool(settingsStore, mcpManager) }
