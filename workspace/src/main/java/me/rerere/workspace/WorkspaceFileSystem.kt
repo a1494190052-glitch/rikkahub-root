@@ -49,7 +49,29 @@ class WorkspaceFileSystem(
         require(!file.exists() || overwrite) { "File already exists: $path" }
         require(!file.exists() || file.isFile) { "Path is not a file: $path" }
         file.parentFile?.mkdirs()
-        file.writeBytes(bytes)
+        // 原子写: 临时文件 → write → flush → fsync → 读回校验 → rename 覆盖目标。
+        // 修复三类问题:
+        //  (1) 原 writeBytes 无 fsync, 写未真正落盘也可能返回, 导致"谎报成功";
+        //  (2) 无写后校验, 静默失败无法被发现;
+        //  (3) rename 依赖目录写权限(属主为 app), 可替换 root 属主的旧文件, 缓解跨 uid 的 EACCES。
+        val tmp = File(file.parentFile, ".${file.name}.${System.nanoTime()}.tmp")
+        try {
+            java.io.FileOutputStream(tmp).use { fos ->
+                fos.write(bytes)
+                fos.flush()
+                fos.fd.sync() // 确保字节真正落盘, 其它读取路径立即可见
+            }
+            // 写后读回校验: 落盘内容必须与预期完全一致, 否则视为写入失败
+            if (!tmp.readBytes().contentEquals(bytes)) {
+                throw java.io.IOException("Write verification failed (read-back mismatch): $path")
+            }
+            // 原子替换目标文件; rename 失败(如跨挂载)时退化为拷贝
+            if (!tmp.renameTo(file)) {
+                tmp.copyTo(file, overwrite = true)
+            }
+        } finally {
+            if (tmp.exists()) tmp.delete()
+        }
         return file.toEntry(root)
     }
 
