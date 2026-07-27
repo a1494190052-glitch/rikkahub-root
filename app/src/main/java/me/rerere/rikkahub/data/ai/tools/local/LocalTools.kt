@@ -37,6 +37,7 @@ class LocalTools(
     val clipboardTool by lazy { buildClipboardTool(context) }
     val ttsTool by lazy { buildTextToSpeechTool(eventBus, ttsManager, settingsStore) }
     val askUserTool by lazy { buildAskUserTool() }
+    val askBtwTool by lazy { buildAskBtwTool() }
     val screenTimeTool by lazy { buildScreenTimeTool(context, eventBus) }
     val calendarQueryTool by lazy { buildCalendarQueryTool(context) }
     val calendarCreateTool by lazy { buildCalendarCreateTool(context) }
@@ -79,6 +80,7 @@ class LocalTools(
         if (options.contains(LocalToolOption.Clipboard)) tools.add(clipboardTool)
         if (options.contains(LocalToolOption.Tts)) tools.add(ttsTool)
         if (options.contains(LocalToolOption.AskUser)) tools.add(askUserTool)
+        if (options.contains(LocalToolOption.AskBtw)) tools.add(askBtwTool)
         if (options.contains(LocalToolOption.ScreenTime)) tools.add(screenTimeTool)
         if (options.contains(LocalToolOption.Calendar)) { tools.add(calendarQueryTool); tools.add(calendarCreateTool) }
         if (options.contains(LocalToolOption.RootShell)) {
