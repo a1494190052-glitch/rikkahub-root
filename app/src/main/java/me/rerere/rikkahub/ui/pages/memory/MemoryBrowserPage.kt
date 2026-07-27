@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.ArrowLeft01
 import me.rerere.hugeicons.stroke.Delete01
 import me.rerere.hugeicons.stroke.Edit01
@@ -90,7 +91,7 @@ fun MemoryBrowserPage(
                 title = { Text("Memory Browser") },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(ArrowLeft01, contentDescription = "Back")
+                        Icon(HugeIcons.ArrowLeft01, contentDescription = "Back")
                     }
                 },
                 actions = {
@@ -117,7 +118,7 @@ fun MemoryBrowserPage(
                         if (isConsolidating) {
                             CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
                         } else {
-                            Icon(Refresh01, contentDescription = "Consolidate")
+                            Icon(HugeIcons.Refresh01, contentDescription = "Consolidate")
                         }
                     }
                 }
@@ -166,7 +167,7 @@ fun MemoryBrowserPage(
                             if (isSearching) {
                                 CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
                             } else {
-                                Icon(Search01, contentDescription = "Search")
+                                Icon(HugeIcons.Search01, contentDescription = "Search")
                             }
                         }
                     }
@@ -401,14 +402,14 @@ private fun MemoryCard(
                 Row {
                     IconButton(onClick = onEdit, modifier = Modifier.size(32.dp)) {
                         Icon(
-                            Edit01,
+                            HugeIcons.Edit01,
                             contentDescription = "Edit",
                             modifier = Modifier.size(16.dp)
                         )
                     }
                     IconButton(onClick = onDelete, modifier = Modifier.size(32.dp)) {
                         Icon(
-                            Delete01,
+                            HugeIcons.Delete01,
                             contentDescription = "Delete",
                             modifier = Modifier.size(16.dp),
                             tint = MaterialTheme.colorScheme.error
@@ -436,6 +437,4 @@ private fun MemoryCard(
             }
         }
     }
-}
- }
 }
