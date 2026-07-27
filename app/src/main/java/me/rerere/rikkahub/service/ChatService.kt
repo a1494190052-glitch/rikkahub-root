@@ -772,7 +772,7 @@ class ChatService(
             val suggestions = result.choices[0].message?.toText()?.split("\n")?.map { it.trim() }?.filter { it.isNotBlank() } ?: emptyList()
             val latestConversation = conversationRepo.getConversationById(conversationId) ?: sessions[conversationId]?.state?.value ?: conversation
             saveConversation(conversationId, latestConversation.copy(chatSuggestions = suggestions.take(10)))
-        }.onFailure { it.printStackTrace() }
+        }.onFailure { addError(it, conversationId) }
     }
 
     // ---- 压缩对话历史 ----
