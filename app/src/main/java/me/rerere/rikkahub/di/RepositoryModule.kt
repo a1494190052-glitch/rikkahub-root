@@ -29,7 +29,10 @@ val repositoryModule = module {
     }
 
     single {
-        MemoryRepository(get())
+        MemoryRepository(
+            memoryDAO = get(),
+            semanticMemoryManager = get(),
+        )
     }
 
     single {

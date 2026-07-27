@@ -30,6 +30,7 @@ class LocalTools(
     private val shellAuditLogger: me.rerere.rikkahub.service.shell.ShellAuditLogger? = null,
     private val ptySessionManager: me.rerere.rikkahub.service.shell.PtySessionManager? = null,
     private val mcpManager: me.rerere.rikkahub.data.ai.mcp.McpManager? = null,
+    private val pluginManager: me.rerere.rikkahub.plugin.manager.PluginManager? = null,
     private val isSubAgent: Boolean = false,
 ) {
     val javascriptTool by lazy { buildJavascriptTool() }
@@ -69,7 +70,7 @@ class LocalTools(
     val mediaScannerTool by lazy { createMediaScannerTool(context) }
 
     fun forSubAgent(): LocalTools =
-        LocalTools(context, eventBus, ttsManager, settingsStore, null, shellAuditLogger, null, isSubAgent = true)
+        LocalTools(context, eventBus, ttsManager, settingsStore, null, shellAuditLogger, null, null, null, isSubAgent = true)
 
     fun getTools(options: List<LocalToolOption>): List<Tool> {
         val tools = mutableListOf<Tool>()
@@ -100,6 +101,19 @@ class LocalTools(
         if (options.contains(LocalToolOption.PostNotification)) tools.add(notificationPostTool)
         if (options.contains(LocalToolOption.Share)) tools.add(shareTool)
         if (options.contains(LocalToolOption.ScanMedia)) tools.add(mediaScannerTool)
+
+        // Plugin tools: merge tools from loaded plugins
+        if (!isSubAgent && pluginManager != null) {
+            try {
+                val pluginTools = kotlinx.coroutines.runBlocking {
+                    pluginManager.getTools()
+                }
+                tools.addAll(pluginTools)
+            } catch (_: Exception) {
+                // Plugin system not ready yet, skip silently
+            }
+        }
+
         return tools
     }
 }

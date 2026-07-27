@@ -207,6 +207,7 @@ dependencies {
     implementation(libs.jlatexmath.font.greek)
     implementation(libs.jlatexmath.font.cyrillic)
     implementation(libs.modelcontextprotocol.kotlin.sdk)
+    implementation(libs.quickjs)
     implementation(libs.jmdns)
     implementation(libs.slf4j.api)
     implementation(libs.slf4j.android)
