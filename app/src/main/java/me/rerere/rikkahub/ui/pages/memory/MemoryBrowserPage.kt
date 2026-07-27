@@ -166,7 +166,7 @@ fun MemoryBrowserPage(
                             if (isSearching) {
                                 CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
                             } else {
-                                Icon(HugeIcons.Stroke.Search01, contentDescription = "Search")
+                                Icon(Search01, contentDescription = "Search")
                             }
                         }
                     }
@@ -408,7 +408,7 @@ private fun MemoryCard(
                     }
                     IconButton(onClick = onDelete, modifier = Modifier.size(32.dp)) {
                         Icon(
-                            Icons.Default.Delete,
+                            Delete01,
                             contentDescription = "Delete",
                             modifier = Modifier.size(16.dp),
                             tint = MaterialTheme.colorScheme.error
