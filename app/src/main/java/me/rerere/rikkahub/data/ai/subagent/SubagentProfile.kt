@@ -38,7 +38,9 @@ data class SubagentProfile(
     companion object {
         val IdentifierRegex = Regex("^[a-z][a-z0-9_]*$")
         val FILE_MUTATING_TOOLS: Set<String> = setOf("workspace_write_file", "workspace_edit_file")
-        val FULLY_READONLY_EXCLUDED_TOOLS: Set<String> = FILE_MUTATING_TOOLS + "workspace_shell"
+        /** 具身/宿主高危工具: root shell、pty 交互终端、截屏、UI 树读取, 只读 profile 一律排除 */
+        val HOST_SHELL_TOOLS: Set<String> = setOf("root_shell", "pty_exec", "pty_session", "root_screenshot", "ui_tree")
+        val FULLY_READONLY_EXCLUDED_TOOLS: Set<String> = FILE_MUTATING_TOOLS + "workspace_shell" + HOST_SHELL_TOOLS
         const val DEFAULT_SUMMARY_MIN_LENGTH = 0
         const val DEFAULT_SUMMARY_CONTINUATION_ATTEMPTS = 0
 

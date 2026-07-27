@@ -531,15 +531,17 @@ class ChatService(
         assistant: Assistant, settings: Settings, workspaceCwd: String?,
         depth: Int, maxDepth: Int, includeBase: Boolean,
         conversationId: Uuid? = null,
+        mcpServerIds: Set<Uuid>? = null,
     ): List<Tool> {
         val profiles = mergeSubagentProfiles(assistant.subagentProfiles, assistant.disabledBuiltinSubagents)
         val result = mutableListOf<Tool>()
 
         if (includeBase) {
-            result += SubagentHost.sandboxToolsForSubagent(buildSubagentBaseTools(assistant, settings, workspaceCwd))
+            result += SubagentHost.sandboxToolsForSubagent(buildSubagentBaseTools(assistant, settings, workspaceCwd, mcpServerIds))
         }
 
-        if (depth + 1 < maxDepth && profiles.isNotEmpty()) {
+        // maxDepth 语义 = 允许嵌套的子代理层数: depth 从 0 起, depth < maxDepth 时允许再 spawn
+        if (depth < maxDepth && profiles.isNotEmpty()) {
             result += createSubagentTools(
                 profiles = profiles, json = json,
                 includeAskBtw = assistant.localTools.contains(LocalToolOption.AskBtw),
@@ -551,7 +553,7 @@ class ChatService(
                         subagentHost.spawn(
                             profile = profile, task = task, settings = settings,
                             parentAssistant = assistant, parentModel = parentModel,
-                            buildChildTools = { child, d -> buildSubagentTools(child, settings, workspaceCwd, d, maxDepth, includeBase = true) },
+                            buildChildTools = { child, d -> buildSubagentTools(child, settings, workspaceCwd, d, maxDepth, includeBase = true, mcpServerIds = profile.mcpServerIds) },
                             depth = depth + 1, maxDepth = maxDepth,
                             onProgress = if (conversationId != null) { subMessages -> updateSubagentProgress(conversationId, null, profileName, subMessages) } else null,
                         )
@@ -573,11 +575,22 @@ class ChatService(
         return result
     }
 
-    private suspend fun buildSubagentBaseTools(assistant: Assistant, settings: Settings, workspaceCwd: String?): List<Tool> = buildList {
+    private suspend fun buildSubagentBaseTools(
+        assistant: Assistant, settings: Settings, workspaceCwd: String?,
+        mcpServerIds: Set<Uuid>? = null,
+    ): List<Tool> = buildList {
         if (assistant.enableWebSearch) addAll(createSearchTools(settings))
         addAll(SubagentHost.sandboxToolsForSubagent(localTools.getTools(assistant.localTools.filter { it != LocalToolOption.AskUser })))
         addAll(createWorkspaceToolsIfReady(assistant.workspaceId?.toString(), workspaceCwd))
         if (assistant.enabledSkills.isNotEmpty()) addAll(createSkillTools(enabledSkills = assistant.enabledSkills, allSkills = skillManager.listSkills(), skillManager = skillManager))
+        // MCP 工具: profile 配了 mcpServerIds 白名单则只挂白名单内的 server, 否则全部挂载
+        mcpManager.getAllAvailableTools()
+            .filter { (serverId, _, _) -> mcpServerIds.isNullOrEmpty() || serverId in mcpServerIds }
+            .forEach { (serverId, serverName, tool) ->
+                if (serverName.isNotEmpty() && serverName.all { it in 'a'..'z' || it in 'A'..'Z' || it in '0'..'9' }) {
+                    add(Tool(name = "mcp__${serverName}__${tool.name}", description = tool.description ?: "", parameters = { tool.inputSchema }, needsApproval = { tool.needsApproval }, execute = { mcpManager.callTool(serverId, tool.name, it.jsonObject) }))
+                }
+            }
     }
 
     private suspend fun manageSubagentProfile(assistantId: Uuid, action: String, name: String, profile: SubagentProfile?): String {

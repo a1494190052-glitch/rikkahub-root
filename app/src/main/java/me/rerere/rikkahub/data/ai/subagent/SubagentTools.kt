@@ -168,7 +168,11 @@ fun createManageSubagentTool(
                 put("system_prompt", buildJsonObject { put("type", "string") })
                 put("model_id", buildJsonObject { put("type", "string") })
                 put("inherit_tools", buildJsonObject { put("type", "boolean") })
-                put("excluded_tools", buildJsonObject { put("type", "array"); put("items", buildJsonObject { put("type", "string") }) })
+                put("excluded_tools", buildJsonObject {
+                    put("type", "array")
+                    put("items", buildJsonObject { put("type", "string") })
+                    put("description", "Tool names this subagent may NOT use. Omit to keep the current value. NOTE: passing an empty array [] CLEARS the exclusion list (all inherited tools allowed).")
+                })
                 put("max_steps", buildJsonObject { put("type", "integer") })
                 put("stream_output", buildJsonObject { put("type", "boolean") })
                 put("enable_memory", buildJsonObject { put("type", "boolean") })

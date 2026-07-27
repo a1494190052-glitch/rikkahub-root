@@ -10,6 +10,9 @@ import kotlinx.coroutines.flow.fold
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import me.rerere.ai.core.MessageRole
 import me.rerere.ai.core.TokenUsage
 import me.rerere.ai.core.Tool
@@ -35,8 +38,6 @@ the parent agent does not need to re-run your work.
 """.trimIndent()
 
 private val NO_APPROVAL: (JsonElement) -> Boolean = { false }
-
-internal fun selectContinuationTools(childTools: List<Tool>): List<Tool> = emptyList()
 
 class SubagentHost(
     private val generationHandler: GenerationHandler,
@@ -76,13 +77,16 @@ class SubagentHost(
             messages = run.messages
 
             var summary = run.summary
+            var countedMessageCount = run.messages.size
             var remainingContinuations = profile.summaryContinuationAttempts
             while (remainingContinuations > 0 && summary.length < profile.summaryMinLength) {
                 remainingContinuations -= 1
                 val continuationMessages = messages + UIMessage.user(SUMMARY_CONTINUATION_PROMPT)
-                run = runToCompletion(profile, settings, childModel, childAssistant, selectContinuationTools(childTools), continuationMessages, onProgress)
+                run = runToCompletion(profile, settings, childModel, childAssistant, emptyList(), continuationMessages, onProgress)
                 steps += 1
-                totalUsage = mergeUsage(totalUsage, run.usage)
+                // 只累加本轮新增消息的 usage, 全量累加会把前轮已计数的 usage 重复计算
+                totalUsage = mergeUsage(totalUsage, accumulateUsage(run.messages.drop(countedMessageCount)))
+                countedMessageCount = run.messages.size
                 messages = run.messages
                 summary = run.summary
             }
@@ -119,7 +123,13 @@ class SubagentHost(
             ).onEach { chunk ->
                 if (chunk is GenerationChunk.Messages && onProgress != null) {
                     val now = System.currentTimeMillis()
-                    val signature = chunk.messages.sumOf { msg -> if (msg.role == MessageRole.ASSISTANT) msg.parts.size else 0 }
+                    val signature = chunk.messages.sumOf { msg ->
+                    if (msg.role == MessageRole.ASSISTANT) {
+                        // parts 数量 + 文本总长度: 流式文本增长也能触发进度回调
+                        msg.parts.size + msg.parts.filterIsInstance<UIMessagePart.Text>().sumOf { it.text.length } +
+                            msg.parts.filterIsInstance<UIMessagePart.Reasoning>().sumOf { it.reasoning.length }
+                    } else 0
+                }
                     if (signature != lastSignature || now - lastEmitTime >= minIntervalMs) {
                         lastEmitTime = now; lastSignature = signature
                         val msgs = chunk.messages
@@ -140,7 +150,9 @@ class SubagentHost(
         }.distinct()
 
         return parent.copy(
-            id = Uuid.random(), name = profile.displayName, systemPrompt = profile.systemPrompt,
+            id = Uuid.random(), name = profile.displayName,
+            // profile 未配置系统提示时给兜底, 避免子代理在零系统提示下行为不可控
+            systemPrompt = profile.systemPrompt.ifBlank { DEFAULT_CHILD_SYSTEM_PROMPT },
             temperature = profile.temperature ?: parent.temperature, topP = profile.topP ?: parent.topP,
             maxTokens = profile.maxTokens ?: parent.maxTokens, reasoningLevel = profile.reasoningLevel,
             contextMessageSize = 0, streamOutput = profile.streamOutput || parent.streamOutput,
@@ -148,6 +160,8 @@ class SubagentHost(
             allowConversationSystemPrompt = false, allowConversationPromptInjection = false,
             enableTimeReminder = false, modeInjectionIds = emptySet(), lorebookIds = emptySet(),
             localTools = localTools, presetMessages = emptyList(), quickMessageIds = emptySet(),
+            // profile 配置了技能白名单则覆盖, 否则继承父助手
+            enabledSkills = profile.enabledSkills.ifEmpty { parent.enabledSkills },
             regexes = emptyList(), customHeaders = parent.customHeaders, customBodies = parent.customBodies,
         )
     }
@@ -186,6 +200,9 @@ class SubagentHost(
     companion object {
         private const val DEFAULT_MAX_DEPTH = 2
 
+        private const val DEFAULT_CHILD_SYSTEM_PROMPT =
+            "You are a task-execution subagent. Complete the assigned task autonomously with the tools available to you, then return a concise but complete summary of what you did, what you found, and anything the parent agent needs to act on. Do not ask questions — proceed with reasonable defaults."
+
         fun buildTranscript(messages: List<UIMessage>, truncateToolOutput: Int = 0): List<SubagentTranscriptStep> {
             val steps = mutableListOf<SubagentTranscriptStep>()
             for (message in messages) {
@@ -207,6 +224,49 @@ class SubagentHost(
             return steps
         }
 
-        fun sandboxToolsForSubagent(tools: List<Tool>): List<Tool> = tools.map { tool -> tool.copy(needsApproval = NO_APPROVAL) }
+        /**
+         * 子代理工具沙箱化:
+         *  - 所有工具强制免审批(子代理环境无人可批, Pending 会永久卡死);
+         *  - 但宿主 shell 类工具(root_shell / pty_exec / pty_session)额外包一层执行期闸门:
+         *    ShellSafety 判定为 WRITE/BLOCKED 的命令直接拒绝, 让子代理把写操作交还父代理.
+         *    只读命令照常放行, 不影响探索类子代理工作.
+         */
+        fun sandboxToolsForSubagent(tools: List<Tool>): List<Tool> = tools.map { tool ->
+            val sandboxed = tool.copy(needsApproval = NO_APPROVAL)
+            if (tool.name in HOST_SHELL_WRITE_GUARDED_TOOLS) {
+                sandboxed.copy(execute = guardHostShellExecution(tool.name, sandboxed.execute))
+            } else {
+                sandboxed
+            }
+        }
+
+        private val HOST_SHELL_WRITE_GUARDED_TOOLS: Set<String> = setOf("root_shell", "pty_exec", "pty_session")
+
+        private fun guardHostShellExecution(
+            toolName: String,
+            original: suspend (JsonElement) -> List<UIMessagePart>,
+        ): suspend (JsonElement) -> List<UIMessagePart> = { args ->
+            if (toolName == "pty_exec" || toolName == "pty_session") {
+                // pty 交互命令无法静态审计, 子代理内一律拒绝
+                listOf(
+                    UIMessagePart.Text(
+                        """{"blocked": true, "reason": "interactive pty sessions are not allowed in a subagent", "message": "Interactive terminal sessions cannot be audited inside a subagent and were NOT started. Report the needed interaction in your summary so the parent agent can run it with user approval."}"""
+                    )
+                )
+            } else {
+                val command = args.jsonObject["command"]?.jsonPrimitive?.contentOrNull.orEmpty()
+                if (me.rerere.rikkahub.data.ai.tools.local.ShellSafety.classify(command) !=
+                    me.rerere.rikkahub.data.ai.tools.local.ShellRisk.READ_ONLY
+                ) {
+                    listOf(
+                        UIMessagePart.Text(
+                            """{"blocked": true, "reason": "write/blocked host shell commands are not allowed in a subagent", "message": "This command was classified as WRITE or BLOCKED and was NOT executed. Subagents may only run read-only host shell commands. Report the required write operation in your summary so the parent agent can execute it with user approval."}"""
+                        )
+                    )
+                } else {
+                    original(args)
+                }
+            }
+        }
     }
 }
