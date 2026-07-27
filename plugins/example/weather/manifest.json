@@ -1,0 +1,66 @@
+{
+  "id": "weather",
+  "name": "Weather Plugin",
+  "version": "1.0.0",
+  "description": "Get current weather information using Open-Meteo API (no API key required)",
+  "author": "RikkaHub",
+  "entry": "main.js",
+  "icon": null,
+  "tools": [
+    {
+      "name": "get_weather",
+      "description": "Get current weather for a location by latitude and longitude. Returns temperature, weather condition, wind speed and humidity.",
+      "parameters": [
+        {
+          "name": "latitude",
+          "type": "number",
+          "description": "Latitude of the location (e.g. 39.9 for Beijing)",
+          "required": true
+        },
+        {
+          "name": "longitude",
+          "type": "number",
+          "description": "Longitude of the location (e.g. 116.4 for Beijing)",
+          "required": true
+        },
+        {
+          "name": "unit",
+          "type": "string",
+          "description": "Temperature unit",
+          "required": false,
+          "enum": ["celsius", "fahrenheit"]
+        }
+      ]
+    },
+    {
+      "name": "geocode",
+      "description": "Convert a city name to latitude and longitude coordinates for use with get_weather.",
+      "parameters": [
+        {
+          "name": "city",
+          "type": "string",
+          "description": "City name to geocode (e.g. 'Beijing', 'Tokyo', 'New York')",
+          "required": true
+        }
+      ]
+    }
+  ],
+  "permissions": ["network"],
+  "allowedHosts": ["api.open-meteo.com", "geocoding-api.open-meteo.com"],
+  "config": [
+    {
+      "key": "default_unit",
+      "label": "Default Temperature Unit",
+      "type": "text",
+      "default": "celsius",
+      "description": "Default temperature unit (celsius or fahrenheit)"
+    }
+  ],
+  "hooks": [
+    {
+      "event": "message_sent",
+      "handler": "onMessageSent"
+    }
+  ],
+  "ui": null
+}

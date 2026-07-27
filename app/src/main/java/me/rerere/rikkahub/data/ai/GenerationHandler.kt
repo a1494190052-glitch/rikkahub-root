@@ -112,7 +112,13 @@ class GenerationHandler(
                         },
                         onDelete = { id ->
                             memoryRepo.deleteMemory(id)
-                        }
+                        },
+                        onSearch = { query, topK ->
+                            memoryRepo.searchMemories(memoryAssistantId, query, topK)
+                        },
+                        onRecall = { context, topK ->
+                            memoryRepo.getRelevantMemories(memoryAssistantId, context, topK)
+                        },
                     ).let(this::addAll)
                 }
                 addAll(tools)
