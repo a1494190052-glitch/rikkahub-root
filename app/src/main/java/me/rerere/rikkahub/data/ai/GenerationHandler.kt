@@ -57,6 +57,9 @@ private const val TAG = "GenerationHandler"
 private const val MAX_TOOL_OUTPUT_CHARS = 32 * 1024
 private const val TOOL_OUTPUT_PREVIEW_CHARS = 4 * 1024
 
+/** 流式输出 UI emit 节流间隔(ms)：约 12 次/秒，兼顾流畅与性能。最终完整状态不受影响。 */
+private const val STREAM_EMIT_THROTTLE_MS = 80L
+
 @Serializable
 sealed interface GenerationChunk {
     data class Messages(
@@ -133,6 +136,7 @@ class GenerationHandler(
 
             // Skip generation if we have approved/denied tool calls to handle
             if (pendingTools.isEmpty()) {
+                var lastStreamEmit = 0L
                 generateInternal(
                     assistant = assistant,
                     settings = settings,
@@ -145,17 +149,23 @@ class GenerationHandler(
                             assistant = assistant,
                             settings = settings
                         )
-                        emit(
-                            GenerationChunk.Messages(
-                                messages.visualTransforms(
-                                    transformers = outputTransformers,
-                                    context = context,
-                                    model = model,
-                                    assistant = assistant,
-                                    settings = settings
+                        // 流式节流: 限制 UI emit 频率(~12次/秒)。messages 每 chunk 都更新保证正确，
+                        // 完整最终状态由工具循环后的 emit 兜底，故跳过中间 emit 安全。
+                        val now = System.currentTimeMillis()
+                        if (now - lastStreamEmit >= STREAM_EMIT_THROTTLE_MS) {
+                            lastStreamEmit = now
+                            emit(
+                                GenerationChunk.Messages(
+                                    messages.visualTransforms(
+                                        transformers = outputTransformers,
+                                        context = context,
+                                        model = model,
+                                        assistant = assistant,
+                                        settings = settings
+                                    )
                                 )
                             )
-                        )
+                        }
                     },
                     transformers = inputTransformers,
                     model = model,
