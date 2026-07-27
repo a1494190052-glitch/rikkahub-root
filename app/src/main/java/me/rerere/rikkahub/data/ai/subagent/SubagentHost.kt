@@ -371,12 +371,12 @@ class SubagentHost(
                 )
             } else {
                 val command = args.jsonObject["command"]?.jsonPrimitive?.contentOrNull.orEmpty()
-                if (me.rerere.rikkahub.data.ai.tools.local.ShellSafety.classify(command) !=
-                    me.rerere.rikkahub.data.ai.tools.local.ShellRisk.READ_ONLY
-                ) {
+                val classification = me.rerere.rikkahub.data.ai.tools.local.ShellSafety.deepClassify(command, strict = true)
+                if (classification.risk != me.rerere.rikkahub.data.ai.tools.local.ShellRisk.READ_ONLY) {
+                    val detail = (classification.reason ?: "write/blocked command").replace("\"", "'")
                     listOf(
                         UIMessagePart.Text(
-                            """{"blocked": true, "reason": "write/blocked host shell commands are not allowed in a subagent", "message": "This command was classified as WRITE or BLOCKED and was NOT executed. Subagents may only run read-only host shell commands. Report the required write operation in your summary so the parent agent can execute it with user approval."}"""
+                            """{"blocked": true, "reason": "$detail", "risk": "${classification.risk}", "message": "This command was classified as ${classification.risk} and was NOT executed in the subagent. Subagents may only run read-only host shell commands. Report the required operation in your summary so the parent agent can execute it with user approval."}"""
                         )
                     )
                 } else {
