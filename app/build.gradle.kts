@@ -20,11 +20,9 @@ android {
         applicationId = "me.rerere.rikkahub"
         minSdk = 26
         targetSdk = 37
-        // 橘瓣移植版：版本号从 2.4.3 起
         val ciRunNumber = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull() ?: 0
         versionCode = 300 + ciRunNumber
         versionName = "2.4.3" + if (ciRunNumber > 0) "-r$ciRunNumber" else ""
-
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
@@ -57,9 +55,7 @@ android {
                 val storePasswordValue = localProperties.getProperty("storePassword")
                 val keyAliasValue = localProperties.getProperty("keyAlias")
                 val keyPasswordValue = localProperties.getProperty("keyPassword")
-                if (storeFilePath != null && storePasswordValue != null &&
-                    keyAliasValue != null && keyPasswordValue != null
-                ) {
+                if (storeFilePath != null && storePasswordValue != null && keyAliasValue != null && keyPasswordValue != null) {
                     storeFile = file(storeFilePath)
                     storePassword = storePasswordValue
                     keyAlias = keyAliasValue
@@ -75,20 +71,16 @@ android {
             isMinifyEnabled = false
             isShrinkResources = false
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
-            buildConfigField("String", "VERSION_NAME", "\"${android.defaultConfig.versionName}\"")
-            buildConfigField("String", "VERSION_CODE", "\"${android.defaultConfig.versionCode}\"")
         }
         debug {
-            applicationIdSuffix = ".debug"
-            versionNameSuffix = "-root"
+            // 去掉 .debug 后缀以兼容 Magisk root 授权和旧版数据
             isMinifyEnabled = false
             isShrinkResources = false
+            versionNameSuffix = "-root"
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
             if (rootProject.file("signing/keystore.jks").exists()) {
                 signingConfig = signingConfigs.getByName("ci")
             }
-            buildConfigField("String", "VERSION_NAME", "\"${android.defaultConfig.versionName}\"")
-            buildConfigField("String", "VERSION_CODE", "\"${android.defaultConfig.versionCode}\"")
         }
     }
     compileOptions {
