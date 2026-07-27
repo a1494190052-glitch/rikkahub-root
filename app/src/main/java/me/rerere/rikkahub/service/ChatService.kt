@@ -186,6 +186,22 @@ class ChatService(
         subagentSessions.put(id, data)
     }
 
+    /** 对话辅助生成器（标题/建议/压缩/翻译）：从本类抽出的职责，通过 lambda 回调本类保存/更新/报错 */
+    private val conversationAssistant: ConversationAssistant by lazy {
+        ConversationAssistant(
+            context = context,
+            appScope = appScope,
+            settingsStore = settingsStore,
+            providerManager = providerManager,
+            conversationRepo = conversationRepo,
+            generationHandler = generationHandler,
+            saveConversation = { id, conv -> saveConversation(id, conv) },
+            updateConversation = { id, conv -> updateConversation(id, conv) },
+            currentConversation = { id -> getConversationFlow(id).value },
+            reportError = { e, cid, title, solution -> addError(e, cid, title, solution) },
+        )
+    }
+
     private val workspaceReminderTransformer = WorkspaceReminderTransformer(workspaceRepository)
 
     private val sessions = ConcurrentHashMap<Uuid, ConversationSession>()
@@ -734,76 +750,18 @@ class ChatService(
 
     // ---- 生成标题 ----
 
-    suspend fun generateTitle(conversationId: Uuid, conversation: Conversation, force: Boolean = false) {
-        val shouldGenerate = when { force -> true; conversation.title.isBlank() -> true; else -> false }
-        if (!shouldGenerate) return
-        runCatching {
-            val settings = settingsStore.settingsFlow.first()
-            val model = settings.findModelById(settings.titleModelId, fallback = settings.fastModelId) ?: return
-            val provider = model.findProvider(settings.providers) ?: return
-            val providerHandler = providerManager.getProviderByType(provider)
-            val result = providerHandler.generateText(
-                providerSetting = provider,
-                messages = listOf(UIMessage.user(prompt = settings.titlePrompt.applyPlaceholders("locale" to Locale.getDefault().displayName, "content" to conversation.currentMessages.takeLast(4).joinToString("\n\n") { it.summaryAsText(maxLength = 500) }))),
-                params = backgroundTextGenerationParams(model),
-            )
-            conversationRepo.getConversationById(conversation.id)?.let { saveConversation(conversationId, it.copy(title = result.choices[0].message?.toText()?.trim() ?: "")) }
-        }.onFailure {
-            it.printStackTrace()
-            addError(error = it, conversationId = conversationId, title = context.getString(R.string.error_title_generate_title), solution = ChatErrorSolution.CheckTitleModelSettings)
-        }
-    }
+    suspend fun generateTitle(conversationId: Uuid, conversation: Conversation, force: Boolean = false) =
+        conversationAssistant.generateTitle(conversationId, conversation, force)
 
     // ---- 生成建议 ----
 
-    suspend fun generateSuggestion(conversationId: Uuid, conversation: Conversation) {
-        runCatching {
-            val settings = settingsStore.settingsFlow.first()
-            if (!settings.enableSuggestion) return
-            val model = settings.findModelById(settings.suggestionModelId, fallback = settings.fastModelId) ?: return
-            val provider = model.findProvider(settings.providers) ?: return
-            sessions[conversationId]?.let { updateConversation(conversationId, it.state.value.copy(chatSuggestions = emptyList())) }
-            val providerHandler = providerManager.getProviderByType(provider)
-            val result = providerHandler.generateText(
-                providerSetting = provider,
-                messages = listOf(UIMessage.user(settings.suggestionPrompt.applyPlaceholders("locale" to Locale.getDefault().displayName, "content" to conversation.currentMessages.takeLast(8).joinToString("\n\n") { it.summaryAsText(maxLength = 500) }))),
-                params = backgroundTextGenerationParams(model),
-            )
-            val suggestions = result.choices[0].message?.toText()?.split("\n")?.map { it.trim() }?.filter { it.isNotBlank() } ?: emptyList()
-            val latestConversation = conversationRepo.getConversationById(conversationId) ?: sessions[conversationId]?.state?.value ?: conversation
-            saveConversation(conversationId, latestConversation.copy(chatSuggestions = suggestions.take(10)))
-        }.onFailure { addError(it, conversationId) }
-    }
+    suspend fun generateSuggestion(conversationId: Uuid, conversation: Conversation) =
+        conversationAssistant.generateSuggestion(conversationId, conversation)
 
     // ---- 压缩对话历史 ----
 
-    suspend fun compressConversation(conversationId: Uuid, conversation: Conversation, additionalPrompt: String, targetTokens: Int, keepRecentMessages: Int = 32): Result<Unit> = runCatching {
-        val settings = settingsStore.settingsFlow.first()
-        val model = settings.findModelById(settings.compressModelId) ?: settings.getCurrentChatModel() ?: throw IllegalStateException("No model available for compression")
-        val provider = model.findProvider(settings.providers) ?: throw IllegalStateException("Provider not found")
-        val providerHandler = providerManager.getProviderByType(provider)
-        val maxMessagesPerChunk = 256
-        val allMessages = conversation.currentMessages
-        val messagesToCompress: List<UIMessage>
-        val messagesToKeep: List<UIMessage>
-        if (keepRecentMessages > 0 && allMessages.size > keepRecentMessages) { messagesToCompress = allMessages.dropLast(keepRecentMessages); messagesToKeep = allMessages.takeLast(keepRecentMessages) }
-        else if (keepRecentMessages > 0) throw IllegalStateException(context.getString(R.string.chat_page_compress_not_enough_messages))
-        else { messagesToCompress = allMessages; messagesToKeep = emptyList() }
-        fun splitMessages(messages: List<UIMessage>): List<List<UIMessage>> {
-            if (messages.size <= maxMessagesPerChunk) return listOf(messages)
-            val mid = messages.size / 2
-            return splitMessages(messages.subList(0, mid)) + splitMessages(messages.subList(mid, messages.size))
-        }
-        suspend fun compressMessages(messages: List<UIMessage>): String {
-            val contentToCompress = messages.joinToString("\n\n") { it.summaryAsText(maxLength = 2000) }
-            val prompt = settings.compressPrompt.applyPlaceholders("content" to contentToCompress, "target_tokens" to targetTokens.toString(), "additional_context" to if (additionalPrompt.isNotBlank()) "Additional instructions from user: $additionalPrompt" else "", "locale" to Locale.getDefault().displayName)
-            val result = providerHandler.generateText(providerSetting = provider, messages = listOf(UIMessage.user(prompt)), params = backgroundTextGenerationParams(model))
-            return result.choices[0].message?.toText()?.trim() ?: throw IllegalStateException("Failed to generate compressed summary")
-        }
-        val compressedSummaries = coroutineScope { splitMessages(messagesToCompress).map { chunk -> async { compressMessages(chunk) } }.awaitAll() }
-        val newMessageNodes = buildList { compressedSummaries.forEach { add(UIMessage.user(it).toMessageNode()) }; addAll(messagesToKeep.map { it.toMessageNode() }) }
-        saveConversation(conversationId, conversation.copy(messageNodes = newMessageNodes, chatSuggestions = emptyList()))
-    }
+    suspend fun compressConversation(conversationId: Uuid, conversation: Conversation, additionalPrompt: String, targetTokens: Int, keepRecentMessages: Int = 32): Result<Unit> =
+        conversationAssistant.compressConversation(conversationId, conversation, additionalPrompt, targetTokens, keepRecentMessages)
 
     // ---- 对话状态 ----
 
@@ -846,27 +804,11 @@ class ChatService(
 
     // ---- 翻译 ----
 
-    fun translateMessage(conversationId: Uuid, message: UIMessage, targetLanguage: Locale) {
-        appScope.launch(Dispatchers.IO) {
-            try {
-                val settings = settingsStore.settingsFlow.first()
-                val messageText = message.parts.filterIsInstance<UIMessagePart.Text>().joinToString("\n\n") { it.text }.trim()
-                if (messageText.isBlank()) return@launch
-                updateTranslationField(conversationId, message.id, context.getString(R.string.translating))
-                generationHandler.translateText(settings = settings, sourceText = messageText, targetLanguage = targetLanguage) { translatedText -> updateTranslationField(conversationId, message.id, translatedText) }.collect {}
-                saveConversation(conversationId, getConversationFlow(conversationId).value)
-            } catch (e: Exception) { clearTranslationField(conversationId, message.id); addError(e, conversationId, title = context.getString(R.string.error_title_translate_message)) }
-        }
-    }
+    fun translateMessage(conversationId: Uuid, message: UIMessage, targetLanguage: Locale) =
+        conversationAssistant.translateMessage(conversationId, message, targetLanguage)
 
-    private fun updateTranslationField(conversationId: Uuid, messageId: Uuid, translationText: String) {
-        val currentConversation = getConversationFlow(conversationId).value
-        val updatedNodes = currentConversation.messageNodes.map { node ->
-            if (node.messages.any { it.id == messageId }) node.copy(messages = node.messages.map { if (it.id == messageId) it.copy(translation = translationText) else it })
-            else node
-        }
-        updateConversation(conversationId, currentConversation.copy(messageNodes = updatedNodes))
-    }
+    private fun updateTranslationField(conversationId: Uuid, messageId: Uuid, translationText: String) =
+        conversationAssistant.updateTranslationField(conversationId, messageId, translationText)
 
     // ---- 消息操作 ----
 
@@ -932,14 +874,8 @@ class ChatService(
         return when (this) { is UIMessagePart.Image -> copy(url = copyLocalFileIfNeeded(url)); is UIMessagePart.Document -> copy(url = copyLocalFileIfNeeded(url)); is UIMessagePart.Video -> copy(url = copyLocalFileIfNeeded(url)); is UIMessagePart.Audio -> copy(url = copyLocalFileIfNeeded(url)); else -> this }
     }
 
-    fun clearTranslationField(conversationId: Uuid, messageId: Uuid) {
-        val currentConversation = getConversationFlow(conversationId).value
-        val updatedNodes = currentConversation.messageNodes.map { node ->
-            if (node.messages.any { it.id == messageId }) node.copy(messages = node.messages.map { if (it.id == messageId) it.copy(translation = null) else it })
-            else node
-        }
-        updateConversation(conversationId, currentConversation.copy(messageNodes = updatedNodes))
-    }
+    fun clearTranslationField(conversationId: Uuid, messageId: Uuid) =
+        conversationAssistant.clearTranslationField(conversationId, messageId)
 
     suspend fun stopGeneration(conversationId: Uuid) {
         val job = sessions[conversationId]?.getJob() ?: return
