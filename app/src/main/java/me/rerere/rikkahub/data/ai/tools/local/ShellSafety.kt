@@ -28,7 +28,7 @@ object ShellSafety {
     /** 命中即拒绝执行的高危模式(对整条命令全文匹配) */
     private val BLOCKED_PATTERNS: List<Pair<Regex, String>> = listOf(
         // rm -rf / 或 rm -rf /* 或递归删除系统目录
-        Regex("""\brm\s+[^;&|]*-[a-zA-Z]*[rf][a-zA-Z]*\s+(--\S+\s+)*(/\*?|/(system|vendor|boot|proc|dev|etc|lib|lib64|bin|sbin|product|data|storage/emulated/0)(/|\s|$))""") to "recursive delete of system-critical path",
+        Regex("""\brm\s+[^;&|]*-[a-zA-Z]*r[a-zA-Z]*\s+(--\S+\s+)*(/\*?|/(system|vendor|boot|proc|dev|etc|lib|lib64|bin|sbin|product|data|storage/emulated/0)(/|\s|$))""") to "recursive delete of system-critical path",
         // dd 写块设备
         Regex("""\bdd\b[^;&|]*\bof=/dev/(block|sd[a-z]|mmcblk|mapper)""") to "dd writing to block device",
         // 文件系统格式化/分区
