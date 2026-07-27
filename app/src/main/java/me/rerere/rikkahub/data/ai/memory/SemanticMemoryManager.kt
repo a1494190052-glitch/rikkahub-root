@@ -18,11 +18,19 @@ data class SemanticSearchResult(
 
 /**
  * 核心语义记忆管理器，协调嵌入生成、存储、检索
+ * 支持本地 ONNX 离线搜索和云端 API 两种模式
  */
 class SemanticMemoryManager(
     private val memoryDAO: MemoryDAO,
     private val embeddingService: EmbeddingService,
 ) {
+
+    /**
+     * 检查是否可以完全离线工作（本地引擎可用）
+     */
+    fun canWorkOffline(): Boolean {
+        return embeddingService.isLocalAvailable()
+    }
 
     /**
      * 创建记忆 + 生成嵌入向量
@@ -115,6 +123,50 @@ class SemanticMemoryManager(
                     memoryDAO.incrementAccessCount(result.memory.id)
                 }
             }
+    }
+
+    /**
+     * 纯离线搜索路径：完全使用本地 ONNX 引擎，不依赖网络
+     * 如果本地引擎不可用，返回空列表
+     *
+     * @param query 查询文本
+     * @param memories 候选记忆列表（含 embedding 字段）
+     * @param topK 返回前 K 个结果
+     * @return 按相似度降序排列的结果列表
+     */
+    suspend fun searchOffline(
+        query: String,
+        memories: List<MemoryEntity>,
+        topK: Int = DEFAULT_TOP_K,
+    ): List<SemanticSearchResult> {
+        if (!embeddingService.isLocalAvailable()) {
+            Log.w(TAG, "searchOffline: local engine not available")
+            return emptyList()
+        }
+
+        val queryEmbedding = embeddingService.embed(query)
+        if (queryEmbedding == null) {
+            Log.w(TAG, "searchOffline: failed to embed query locally")
+            return emptyList()
+        }
+
+        Log.d(TAG, "searchOffline: computing similarity for ${memories.size} memories")
+
+        return memories
+            .mapNotNull { memory ->
+                val memEmbedding = memory.embedding?.let { VectorUtils.byteArrayToFloatArray(it) }
+                    ?: return@mapNotNull null
+                // 维度不匹配时跳过（兼容旧数据）
+                if (memEmbedding.size != queryEmbedding.size) {
+                    Log.w(TAG, "searchOffline: dimension mismatch for memory #${memory.id}: " +
+                            "${memEmbedding.size} vs ${queryEmbedding.size}")
+                    return@mapNotNull null
+                }
+                val score = VectorUtils.cosineSimilarity(queryEmbedding, memEmbedding)
+                SemanticSearchResult(memory = memory, score = score)
+            }
+            .sortedByDescending { it.score }
+            .take(topK)
     }
 
     /**

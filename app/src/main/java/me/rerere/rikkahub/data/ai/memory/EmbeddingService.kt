@@ -29,16 +29,43 @@ private const val RETRY_DELAY_MS = 1000L
 private const val MAX_CACHE_SIZE = 512
 
 /**
- * OpenAI 兼容的 Embedding API 调用服务
- * 使用项目已有的 OkHttpClient，支持批量嵌入、重试、缓存
+ * Embedding 提供者模式
+ */
+enum class EmbeddingProvider {
+    /** 仅使用本地 ONNX 模型 */
+    LOCAL,
+    /** 仅使用云端 API */
+    CLOUD,
+    /** 自动：优先本地，本地不可用时 fallback 到云端 */
+    AUTO,
+}
+
+/**
+ * 统一 Embedding 服务
+ * 支持本地 ONNX 推理（384维 all-MiniLM-L6-v2）和云端 API（text-embedding-3-small, dimensions=384）
+ * 统一输出维度为 384，支持 AUTO 模式自动切换
  */
 class EmbeddingService(
     private val okHttpClient: OkHttpClient,
     private val settingsStore: SettingsStore,
     private val json: Json,
+    private val localEngine: LocalEmbeddingEngine? = null,
+    private val provider: EmbeddingProvider = EmbeddingProvider.AUTO,
 ) {
     // 简单 LRU 缓存：text hash -> embedding
     private val embeddingCache = ConcurrentHashMap<Int, FloatArray>()
+
+    /**
+     * 检查本地 ONNX 模型是否可用
+     */
+    fun isLocalAvailable(): Boolean {
+        return localEngine?.isModelAvailable() == true
+    }
+
+    /**
+     * 获取当前生效的 provider 模式
+     */
+    fun getActiveProvider(): EmbeddingProvider = provider
 
     /**
      * 获取第一个可用的 OpenAI 兼容 provider 配置
@@ -57,7 +84,7 @@ class EmbeddingService(
      * 生成单条文本的嵌入向量
      * @param text 输入文本
      * @param model 嵌入模型名称（默认 text-embedding-3-small）
-     * @return 嵌入向量，失败返回 null
+     * @return 384维嵌入向量，失败返回 null
      */
     suspend fun embed(text: String, model: String = DEFAULT_MODEL): FloatArray? {
         return embedBatch(listOf(text), model).firstOrNull()
@@ -90,8 +117,13 @@ class EmbeddingService(
 
         if (uncachedTexts.isEmpty()) return results.toList()
 
-        // 调用 API
-        val embeddings = callEmbeddingApi(uncachedTexts, model)
+        // 根据 provider 模式选择路径
+        val embeddings = when (provider) {
+            EmbeddingProvider.LOCAL -> embedLocal(uncachedTexts)
+            EmbeddingProvider.CLOUD -> embedCloud(uncachedTexts, model)
+            EmbeddingProvider.AUTO -> embedAuto(uncachedTexts, model)
+        }
+
         if (embeddings != null) {
             embeddings.forEachIndexed { i, embedding ->
                 if (embedding != null) {
@@ -113,7 +145,56 @@ class EmbeddingService(
     }
 
     /**
+     * AUTO 模式：优先本地，本地不可用或失败时 fallback 到云端
+     */
+    private suspend fun embedAuto(texts: List<String>, model: String): List<FloatArray?>? {
+        // 尝试本地
+        if (isLocalAvailable()) {
+            Log.d(TAG, "AUTO mode: trying local ONNX engine")
+            val localResults = embedLocal(texts)
+            if (localResults != null && localResults.any { it != null }) {
+                Log.d(TAG, "AUTO mode: local embedding succeeded")
+                return localResults
+            }
+            Log.w(TAG, "AUTO mode: local failed, falling back to cloud")
+        } else {
+            Log.d(TAG, "AUTO mode: local not available, using cloud")
+        }
+
+        // Fallback 到云端
+        return embedCloud(texts, model)
+    }
+
+    /**
+     * 本地 ONNX 推理路径
+     */
+    private suspend fun embedLocal(texts: List<String>): List<FloatArray?>? {
+        val engine = localEngine ?: return null
+        return try {
+            val results = engine.embedBatch(texts)
+            if (results.isEmpty()) {
+                // 返回与输入等长的 null 列表
+                List(texts.size) { null }
+            } else {
+                // 对齐结果（embedBatch 可能返回少于输入数量的结果）
+                List(texts.size) { i -> results.getOrNull(i) }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Local embedding failed", e)
+            null
+        }
+    }
+
+    /**
+     * 云端 API 路径（带重试）
+     */
+    private suspend fun embedCloud(texts: List<String>, model: String): List<FloatArray?>? {
+        return callEmbeddingApi(texts, model)
+    }
+
+    /**
      * 调用 OpenAI 兼容的 /v1/embeddings API
+     * 使用 dimensions=384 参数统一输出维度
      */
     private suspend fun callEmbeddingApi(texts: List<String>, model: String): List<FloatArray?>? {
         val config = getEmbeddingProviderConfig()
@@ -123,9 +204,10 @@ class EmbeddingService(
         }
         val (baseUrl, apiKey) = config
 
-        // 构建请求体
+        // 构建请求体，指定 dimensions=384 以匹配本地模型维度
         val requestBody = buildJsonObject {
             put("model", model)
+            put("dimensions", UNIFIED_DIMENSION)
             put("input", buildJsonArray {
                 texts.forEach { text ->
                     add(JsonPrimitive(text))
@@ -134,7 +216,7 @@ class EmbeddingService(
         }.toString()
 
         val url = "$baseUrl/embeddings"
-        Log.d(TAG, "Calling embeddings API: $url, model=$model, texts=${texts.size}")
+        Log.d(TAG, "Calling embeddings API: $url, model=$model, dims=$UNIFIED_DIMENSION, texts=${texts.size}")
 
         var lastException: Exception? = null
         for (attempt in 1..MAX_RETRIES) {
@@ -204,6 +286,9 @@ class EmbeddingService(
 
     companion object {
         const val DEFAULT_MODEL = "text-embedding-3-small"
+
+        /** 统一嵌入维度：本地 all-MiniLM-L6-v2 = 384, 云端 text-embedding-3-small 也设为 384 */
+        const val UNIFIED_DIMENSION = 384
     }
 }
 
