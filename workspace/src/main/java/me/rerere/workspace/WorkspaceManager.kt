@@ -79,7 +79,44 @@ class WorkspaceManager(
         overwrite: Boolean = true,
         area: WorkspaceStorageArea = WorkspaceStorageArea.FILES,
         charset: Charset = StandardCharsets.UTF_8,
-    ): WorkspaceFileEntry = fileSystem.writeText(areaDir(root, area), path, text, overwrite, charset)
+    ): WorkspaceFileEntry = writeWithRootFallback(areaDir(root, area), path) {
+        fileSystem.writeText(areaDir(root, area), path, text, overwrite, charset)
+    }
+
+    /**
+     * 写文件; 若 root 模式下因跨 uid 属主导致 EACCES, 先用 root chmod 666 再重试一次。
+     * (root_shell 以 uid 0 创建的文件属主为 root, app uid 默认无写权限 → EACCES。)
+     */
+    private fun writeWithRootFallback(
+        areaRoot: File,
+        path: String,
+        write: () -> WorkspaceFileEntry,
+    ): WorkspaceFileEntry {
+        return try {
+            write()
+        } catch (e: java.io.IOException) {
+            if (isRootMode() && isPermissionError(e)) {
+                makeWritableViaRoot(fileSystem.resolve(areaRoot, path))
+                write()
+            } else {
+                throw e
+            }
+        }
+    }
+
+    private fun isPermissionError(e: java.io.IOException): Boolean {
+        val msg = (e.message ?: "").lowercase()
+        return msg.contains("eacces") || msg.contains("permission denied")
+    }
+
+    private fun makeWritableViaRoot(file: File) {
+        runCatching {
+            rootRunner.execute(
+                command = "chmod 666 '${file.absolutePath.replace("'", "'\\''")}'",
+                timeoutMillis = 5000,
+            )
+        }
+    }
 
     fun importFile(
         root: String,
