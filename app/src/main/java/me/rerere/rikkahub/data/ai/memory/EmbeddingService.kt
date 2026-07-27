@@ -29,16 +29,50 @@ private const val RETRY_DELAY_MS = 1000L
 private const val MAX_CACHE_SIZE = 512
 
 /**
- * OpenAI 兼容的 Embedding API 调用服务
- * 使用项目已有的 OkHttpClient，支持批量嵌入、重试、缓存
+ * Embedding 后端策略
+ */
+enum class EmbeddingBackend {
+    /** 仅使用本地 ONNX 模型 */
+    LOCAL,
+    /** 仅使用远程 OpenAI 兼容 API */
+    REMOTE,
+    /** 自动：本地优先，远程兜底 */
+    AUTO,
+}
+
+/**
+ * 统一 Embedding 服务 — 策略模式
+ *
+ * 支持三种后端：
+ * - LOCAL: 本地 ONNX Runtime 推理（离线可用，384 维）
+ * - REMOTE: OpenAI 兼容 API（需网络，1536 维）
+ * - AUTO: 本地优先，本地不可用时自动降级到远程
+ *
+ * 注意：本地和远程产出的向量维度不同（384 vs 1536），
+ * 搜索时 SemanticMemoryManager 会跳过维度不匹配的向量比较。
  */
 class EmbeddingService(
     private val okHttpClient: OkHttpClient,
     private val settingsStore: SettingsStore,
     private val json: Json,
+    private val localEmbedding: LocalEmbeddingService? = null,
 ) {
     // 简单 LRU 缓存：text hash -> embedding
     private val embeddingCache = ConcurrentHashMap<Int, FloatArray>()
+
+    /** 当前使用的后端策略 */
+    @Volatile
+    var backend: EmbeddingBackend = EmbeddingBackend.AUTO
+
+    /** 当前实际使用的向量维度（用于外部判断） */
+    val activeDimension: Int
+        get() = when {
+            backend == EmbeddingBackend.LOCAL -> LocalEmbeddingService.MODEL_DIMENSION
+            backend == EmbeddingBackend.REMOTE -> REMOTE_DIMENSION
+            // AUTO: 本地可用则 384，否则 1536
+            localEmbedding?.isAvailable() == true -> LocalEmbeddingService.MODEL_DIMENSION
+            else -> REMOTE_DIMENSION
+        }
 
     /**
      * 获取第一个可用的 OpenAI 兼容 provider 配置
@@ -56,7 +90,7 @@ class EmbeddingService(
     /**
      * 生成单条文本的嵌入向量
      * @param text 输入文本
-     * @param model 嵌入模型名称（默认 text-embedding-3-small）
+     * @param model 嵌入模型名称（仅远程模式使用）
      * @return 嵌入向量，失败返回 null
      */
     suspend fun embed(text: String, model: String = DEFAULT_MODEL): FloatArray? {
@@ -66,7 +100,7 @@ class EmbeddingService(
     /**
      * 批量生成嵌入向量
      * @param texts 输入文本列表
-     * @param model 嵌入模型名称
+     * @param model 嵌入模型名称（仅远程模式使用）
      * @return 嵌入向量列表（与输入顺序对应），失败的条目为 null
      */
     suspend fun embedBatch(texts: List<String>, model: String = DEFAULT_MODEL): List<FloatArray?> {
@@ -90,8 +124,45 @@ class EmbeddingService(
 
         if (uncachedTexts.isEmpty()) return results.toList()
 
-        // 调用 API
-        val embeddings = callEmbeddingApi(uncachedTexts, model)
+        // 根据后端策略选择推理路径
+        val embeddings = when (backend) {
+            EmbeddingBackend.LOCAL -> embedLocalBatch(uncachedTexts)
+            EmbeddingBackend.REMOTE -> callEmbeddingApi(uncachedTexts, model)
+            EmbeddingBackend.AUTO -> {
+                // 本地优先，远程兜底
+                val localResult = if (localEmbedding?.isAvailable() == true) {
+                    embedLocalBatch(uncachedTexts)
+                } else {
+                    null
+                }
+                // 如果本地全部成功，直接用；否则对失败的条目尝试远程
+                if (localResult != null && localResult.all { it != null }) {
+                    localResult
+                } else if (localResult != null) {
+                    // 部分失败，对失败的尝试远程
+                    val failedIndices = localResult.indices.filter { localResult[it] == null }
+                    if (failedIndices.isNotEmpty()) {
+                        val failedTexts = failedIndices.map { uncachedTexts[it] }
+                        val remoteResult = callEmbeddingApi(failedTexts, model)
+                        if (remoteResult != null) {
+                            val merged = localResult.toMutableList()
+                            failedIndices.forEachIndexed { i, origIdx ->
+                                merged[origIdx] = remoteResult.getOrNull(i)
+                            }
+                            merged
+                        } else {
+                            localResult
+                        }
+                    } else {
+                        localResult
+                    }
+                } else {
+                    // 本地完全不可用，走远程
+                    callEmbeddingApi(uncachedTexts, model)
+                }
+            }
+        }
+
         if (embeddings != null) {
             embeddings.forEachIndexed { i, embedding ->
                 if (embedding != null) {
@@ -110,6 +181,20 @@ class EmbeddingService(
         }
 
         return results.toList()
+    }
+
+    /**
+     * 本地 ONNX 批量推理
+     */
+    private suspend fun embedLocalBatch(texts: List<String>): List<FloatArray?>? {
+        val local = localEmbedding ?: return null
+        if (!local.isAvailable()) return null
+        return try {
+            local.embedBatch(texts)
+        } catch (e: Exception) {
+            Log.w(TAG, "Local embedding failed, will fallback", e)
+            null
+        }
     }
 
     /**
@@ -204,6 +289,7 @@ class EmbeddingService(
 
     companion object {
         const val DEFAULT_MODEL = "text-embedding-3-small"
+        const val REMOTE_DIMENSION = 1536
     }
 }
 

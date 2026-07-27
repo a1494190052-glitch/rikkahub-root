@@ -156,11 +156,24 @@ val dataSourceModule = module {
     single { McpManager(settingsStore = get(), appScope = get(), filesManager = get(), appEventBus = get()) }
 
     // === RAG 语义记忆组件 ===
+
+    // 本地 ONNX Embedding 服务（可选，模型未下载时为 null）
+    single {
+        val context: Context = get()
+        val localEmbedding = me.rerere.rikkahub.data.ai.memory.LocalEmbeddingService(context)
+        // 尝试初始化（如果模型已下载）
+        if (localEmbedding.isModelDownloaded()) {
+            localEmbedding.initialize()
+        }
+        localEmbedding
+    }
+
     single {
         me.rerere.rikkahub.data.ai.memory.EmbeddingService(
             okHttpClient = get(),
             settingsStore = get(),
             json = get(),
+            localEmbedding = get(),
         )
     }
 
@@ -168,6 +181,14 @@ val dataSourceModule = module {
         me.rerere.rikkahub.data.ai.memory.SemanticMemoryManager(
             memoryDAO = get(),
             embeddingService = get(),
+        )
+    }
+
+    // 模型下载管理器
+    single {
+        me.rerere.rikkahub.data.ai.memory.ModelDownloadManager(
+            context = get(),
+            okHttpClient = get(),
         )
     }
 
