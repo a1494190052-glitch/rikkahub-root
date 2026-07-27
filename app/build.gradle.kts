@@ -17,7 +17,7 @@ android {
     compileSdk = 37
 
     defaultConfig {
-        applicationId = "me.rerere.rikkahub"
+        applicationId = "me.rerere.rikkahub.root"
         minSdk = 26
         targetSdk = 37
         val ciRunNumber = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull() ?: 0
@@ -73,7 +73,6 @@ android {
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }
         debug {
-            // 去掉 .debug 后缀以兼容 Magisk root 授权和旧版数据
             isMinifyEnabled = false
             isShrinkResources = false
             versionNameSuffix = "-root"
