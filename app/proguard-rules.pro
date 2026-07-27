@@ -45,3 +45,10 @@
 -keepattributes Signature, InnerClasses, EnclosingMethod
 -keep class com.fasterxml.jackson.** { *; }
 -keep class com.auth0.jwt.** { *; }
+
+# QuickJS wrapper — JNI native 方法由 C++ 调用，R8 不可移除/改名
+-keep class com.whl.quickjs.wrapper.** { *; }
+-keepclassmembers class com.whl.quickjs.wrapper.** { native <methods>; }
+
+# termux terminal-view — JNI libtermux.so
+-keep class com.termux.** { *; }
