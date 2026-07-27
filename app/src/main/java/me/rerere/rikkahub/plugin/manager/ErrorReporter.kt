@@ -11,7 +11,7 @@ fun interface ErrorReporter {
     /**
      * 上报一个错误。实现方应自行处理 CancellationException（如 ChatService.addError 会跳过它）。
      * @param error 异常
-     * @param title 用户可见的错误标题（可选）
+     * @param title 用户可见的错误标题（可选，传 null 表示无标题）
      */
-    fun report(error: Throwable, title: String? = null)
+    fun report(error: Throwable, title: String?)
 }
