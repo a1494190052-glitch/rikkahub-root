@@ -18,15 +18,49 @@ data class SemanticSearchResult(
 
 /**
  * 核心语义记忆管理器，协调嵌入生成、存储、检索
- * 使用云端 Embedding API (dimensions=384) + int8 量化存储
+ * 使用云端 Embedding API (dimensions=384) + int8 量化存储（体积省 75%）
  */
 class SemanticMemoryManager(
     private val memoryDAO: MemoryDAO,
     private val embeddingService: EmbeddingService,
 ) {
 
+    /** 嵌入维度（与 EmbeddingService.UNIFIED_DIMENSION 一致） */
+    private val embeddingDim: Int get() = EmbeddingService.UNIFIED_DIMENSION
+
     /**
-     * 创建记忆 + 生成嵌入向量
+     * 计算查询向量与已存储嵌入的余弦相似度。
+     * 自动识别存储格式（int8 量化 / float32），兼容新旧数据混合。
+     * @return 相似度，格式不兼容或维度不匹配时返回 null
+     */
+    private fun similarityToStored(query: FloatArray, storedBytes: ByteArray): Float? {
+        return if (VectorUtils.isQuantizedFormat(storedBytes, query.size)) {
+            VectorUtils.cosineSimilarityMixed(query, storedBytes)
+        } else {
+            val memVec = VectorUtils.byteArrayToFloatArray(storedBytes)
+            if (memVec.size != query.size) null else VectorUtils.cosineSimilarity(query, memVec)
+        }
+    }
+
+    /**
+     * 计算两个已存储嵌入之间的余弦相似度（用于 consolidation）。
+     * 两者均可能为量化或浮点格式，自动适配。
+     */
+    private fun similarityBetweenStored(a: ByteArray, b: ByteArray): Float? {
+        val aQuantized = VectorUtils.isQuantizedFormat(a, embeddingDim)
+        val bQuantized = VectorUtils.isQuantizedFormat(b, embeddingDim)
+        return when {
+            aQuantized && bQuantized -> VectorUtils.cosineSimilarityQuantized(a, b)
+            else -> {
+                val va = if (aQuantized) VectorUtils.dequantize(a) else VectorUtils.byteArrayToFloatArray(a)
+                val vb = if (bQuantized) VectorUtils.dequantize(b) else VectorUtils.byteArrayToFloatArray(b)
+                if (va.size != vb.size) null else VectorUtils.cosineSimilarity(va, vb)
+            }
+        }
+    }
+
+    /**
+     * 创建记忆 + 生成嵌入向量（int8 量化存储）
      * @return 新创建的记忆实体（含 ID）
      */
     suspend fun addMemory(
@@ -38,7 +72,7 @@ class SemanticMemoryManager(
     ): MemoryEntity {
         val now = System.currentTimeMillis()
         val embedding = embeddingService.embed(content)
-        val embeddingBytes = embedding?.let { VectorUtils.floatArrayToByteArray(it) }
+        val embeddingBytes = embedding?.let { VectorUtils.quantize(it) }
 
         val entity = MemoryEntity(
             assistantId = assistantId,
@@ -64,7 +98,7 @@ class SemanticMemoryManager(
     suspend fun updateMemory(id: Int, content: String): MemoryEntity? {
         val existing = memoryDAO.getMemoryById(id) ?: return null
         val embedding = embeddingService.embed(content)
-        val embeddingBytes = embedding?.let { VectorUtils.floatArrayToByteArray(it) }
+        val embeddingBytes = embedding?.let { VectorUtils.quantize(it) }
 
         val updated = existing.copy(
             content = content,
@@ -103,9 +137,8 @@ class SemanticMemoryManager(
 
         return memoriesWithEmbedding
             .mapNotNull { memory ->
-                val memEmbedding = memory.embedding?.let { VectorUtils.byteArrayToFloatArray(it) }
-                    ?: return@mapNotNull null
-                val score = VectorUtils.cosineSimilarity(queryEmbedding, memEmbedding)
+                val stored = memory.embedding ?: return@mapNotNull null
+                val score = similarityToStored(queryEmbedding, stored) ?: return@mapNotNull null
                 SemanticSearchResult(memory = memory, score = score)
             }
             .sortedByDescending { it.score }
@@ -143,9 +176,8 @@ class SemanticMemoryManager(
 
         return memoriesWithEmbedding
             .mapNotNull { memory ->
-                val memEmbedding = memory.embedding?.let { VectorUtils.byteArrayToFloatArray(it) }
-                    ?: return@mapNotNull null
-                val semanticScore = VectorUtils.cosineSimilarity(contextEmbedding, memEmbedding)
+                val stored = memory.embedding ?: return@mapNotNull null
+                val semanticScore = similarityToStored(contextEmbedding, stored) ?: return@mapNotNull null
                 val importanceScore = memory.importance / 5.0f
                 val ageDays = (System.currentTimeMillis() - memory.createdAt) / (1000.0 * 60 * 60 * 24)
                 val freshnessScore = (1.0 / (1.0 + ageDays / 30.0)).toFloat()
@@ -174,15 +206,13 @@ class SemanticMemoryManager(
 
         for (i in memories.indices) {
             if (memories[i].id in toDelete) continue
-            val embeddingI = memories[i].embedding?.let { VectorUtils.byteArrayToFloatArray(it) }
-                ?: continue
+            val bytesI = memories[i].embedding ?: continue
 
             for (j in i + 1 until memories.size) {
                 if (memories[j].id in toDelete) continue
-                val embeddingJ = memories[j].embedding?.let { VectorUtils.byteArrayToFloatArray(it) }
-                    ?: continue
+                val bytesJ = memories[j].embedding ?: continue
 
-                val similarity = VectorUtils.cosineSimilarity(embeddingI, embeddingJ)
+                val similarity = similarityBetweenStored(bytesI, bytesJ) ?: continue
                 if (similarity >= CONSOLIDATION_SIMILARITY_THRESHOLD) {
                     val keep = if (memories[i].importance >= memories[j].importance) memories[i] else memories[j]
                     val remove = if (keep.id == memories[i].id) memories[j] else memories[i]
@@ -205,7 +235,7 @@ class SemanticMemoryManager(
         for ((keepId, mergedContent) in mergedContents) {
             val existing = memoryDAO.getMemoryById(keepId) ?: continue
             val embedding = embeddingService.embed(mergedContent)
-            val embeddingBytes = embedding?.let { VectorUtils.floatArrayToByteArray(it) }
+            val embeddingBytes = embedding?.let { VectorUtils.quantize(it) }
             memoryDAO.updateMemory(
                 existing.copy(
                     content = mergedContent,
@@ -236,7 +266,7 @@ class SemanticMemoryManager(
         withoutEmbedding.forEachIndexed { index, memory ->
             val embedding = embeddings.getOrNull(index) ?: return@forEachIndexed
             memoryDAO.updateMemory(
-                memory.copy(embedding = VectorUtils.floatArrayToByteArray(embedding))
+                memory.copy(embedding = VectorUtils.quantize(embedding))
             )
             count++
         }
