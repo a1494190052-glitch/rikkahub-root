@@ -26,6 +26,10 @@ sealed class LocalToolOption {
     data object AskUser : LocalToolOption()
 
     @Serializable
+    @SerialName("ask_btw")
+    data object AskBtw : LocalToolOption()
+
+    @Serializable
     @SerialName("screen_time")
     data object ScreenTime : LocalToolOption()
 
