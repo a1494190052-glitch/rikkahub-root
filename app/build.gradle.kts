@@ -17,7 +17,7 @@ android {
     compileSdk = 37
 
     defaultConfig {
-        applicationId = "me.rerere.rikkahub.root"
+        applicationId = "me.rerere.rikkahub.root2"
         minSdk = 26
         targetSdk = 37
         val ciRunNumber = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull() ?: 0
@@ -75,7 +75,7 @@ android {
         debug {
             isMinifyEnabled = false
             isShrinkResources = false
-            versionNameSuffix = "-root"
+            versionNameSuffix = "-root2"
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
             if (rootProject.file("signing/keystore.jks").exists()) {
                 signingConfig = signingConfigs.getByName("ci")
