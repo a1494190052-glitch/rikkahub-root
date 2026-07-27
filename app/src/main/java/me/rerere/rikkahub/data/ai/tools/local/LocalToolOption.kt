@@ -44,4 +44,58 @@ sealed class LocalToolOption {
     @Serializable
     @SerialName("scheduler")
     data object Scheduler : LocalToolOption()
+
+    // ===== 橘瓣移植系统工具 =====
+
+    @Serializable
+    @SerialName("battery")
+    data object Battery : LocalToolOption()
+
+    @Serializable
+    @SerialName("brightness")
+    data object Brightness : LocalToolOption()
+
+    @Serializable
+    @SerialName("torch")
+    data object Torch : LocalToolOption()
+
+    @Serializable
+    @SerialName("vibrate")
+    data object Vibrate : LocalToolOption()
+
+    @Serializable
+    @SerialName("volume")
+    data object Volume : LocalToolOption()
+
+    @Serializable
+    @SerialName("wake_screen")
+    data object WakeScreen : LocalToolOption()
+
+    @Serializable
+    @SerialName("wifi_info")
+    data object WifiInfo : LocalToolOption()
+
+    @Serializable
+    @SerialName("telephony_info")
+    data object TelephonyInfo : LocalToolOption()
+
+    @Serializable
+    @SerialName("storage_info")
+    data object StorageInfo : LocalToolOption()
+
+    @Serializable
+    @SerialName("toast")
+    data object Toast : LocalToolOption()
+
+    @Serializable
+    @SerialName("post_notification")
+    data object PostNotification : LocalToolOption()
+
+    @Serializable
+    @SerialName("share")
+    data object Share : LocalToolOption()
+
+    @Serializable
+    @SerialName("scan_media")
+    data object ScanMedia : LocalToolOption()
 }
