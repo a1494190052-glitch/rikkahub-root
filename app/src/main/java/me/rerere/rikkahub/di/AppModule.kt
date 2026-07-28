@@ -22,7 +22,10 @@ val appModule = module {
 
     single { Highlighter(get()) }
     single { AppEventBus() }
-    single { LocalTools(get(), get(), get(), get(), get(), get(), get(), get()) }
+    single { LocalTools(get(), get(), get(), get(), get(), get(), get(), get(), browserTabPool = get()) }
+
+    // ---- 浏览器自动化 (OpenMinis 移植) ----
+    single { me.rerere.rikkahub.browser.BrowserTabPool(get()) }
 
     single {
         val context: android.content.Context = get()
