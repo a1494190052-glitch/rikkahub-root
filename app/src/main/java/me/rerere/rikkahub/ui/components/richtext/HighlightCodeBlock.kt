@@ -493,14 +493,13 @@ private fun CodeBlockPreview(
         settings = {
             builtInZoomControls = true
             displayZoomControls = false
-            // 1:1 渲染，不缩放（v4 已验证）
+            // 1:1 渲染，不缩放
             useWideViewPort = false
             loadWithOverviewMode = false
         }
     )
 
-    // 用 Android 原生 webView.contentHeight 测高：返回内容真实高度，不受视口高度影响，
-    // 不会像 JS scrollHeight 那样陷入"测高→设高→视口变高→再测更高"的反馈循环（曾飙到 32000 撑爆渲染）。
+    // 用 Android 原生 webView.contentHeight 测内容真实高度（不受视口影响，无反馈循环）
     LaunchedEffect(state.isLoading) {
         if (!state.isLoading) {
             repeat(5) {
@@ -514,72 +513,43 @@ private fun CodeBlockPreview(
         }
     }
 
-    // WebView 高度 = 内容全高，限制在合理区间（防异常值撑爆渲染纹理）
-    val webViewHeightDp = if (contentHeightCssPx == 0) 220.dp else contentHeightCssPx.dp.coerceIn(120.dp, 4000.dp)
-    val scrollState = rememberScrollState()
+    // 预览高度 = min(内容高, 420dp)：内容矮则贴合内容，内容高则为 420dp 窗口供内部滚动
+    val previewHeight = if (contentHeightCssPx == 0) 220.dp else contentHeightCssPx.dp.coerceIn(120.dp, 420.dp)
 
-    // 外面套一个固定高度的 Compose 滚动框：框内可上下滑动浏览 HTML，
-    // 滑到边界后由 Compose 原生嵌套滚动自动接力给外层聊天列表（不冲突）。
-    Box(
+    // WebView 底层已换成 NestedScrollWebView：开启嵌套滚动后，WebView 在窗口内自身滚动，
+    // 滚到顶/底会自动把剩余滚动量通过嵌套滚动协议交给外层 LazyColumn，无缝接力，无冲突。
+    WebView(
+        state = state,
         modifier = modifier
             .clip(RoundedCornerShape(4.dp))
-            .height(420.dp)
-            .verticalScroll(scrollState)
-    ) {
-        WebView(
-            state = state,
-            modifier = Modifier.fillMaxWidth().height(webViewHeightDp),
-            onCreated = { webView ->
-                // 强制 1:1 初始缩放，防止内容被压缩
-                webView.setInitialScale(100)
-                // 切断 WebView 嵌套滚动协议，自身完全不参与滚动
-                webView.isNestedScrollingEnabled = false
-            },
-        )
-    }
+            .height(previewHeight),
+        onCreated = { webView ->
+            // 强制 1:1 初始缩放，防止内容被压缩
+            webView.setInitialScale(100)
+            // 开启嵌套滚动：内部滚动 + 边界接力外层聊天列表
+            webView.isNestedScrollingEnabled = true
+        },
+    )
 }
-
-// 内嵌脚本：仅锁定 overflow:hidden（WebView 不自滚）+ 输出诊断，不做测高回传。
-// 测高改用 Android 原生 webView.contentHeight（不受视口高度影响，避免反馈循环飙到 32000）。
-private const val PREVIEW_HEIGHT_SCRIPT = """
-<script>
-(function(){
-  function fix(){
-    try{document.documentElement.style.overflow='hidden';if(document.body)document.body.style.overflow='hidden';}catch(e){}
-    try{console.error('[PREVIEW-DIAG] bodySH='+(document.body?document.body.scrollHeight:0)+' docSH='+document.documentElement.scrollHeight+' innerH='+window.innerHeight);}catch(e){}
-  }
-  if(document.readyState==='complete'){fix();}else{window.addEventListener('load',fix);}
-  setTimeout(fix,300);
-})();
-</script>
-"""
 
 private fun buildCodePreviewHtml(code: String, language: String): String {
     return if (language == "svg") {
-        """<!DOCTYPE html><html><head><meta name="viewport" content="width=device-width, initial-scale=1.0"></head><body style="margin:0;display:flex;justify-content:center;align-items:center;">$code$PREVIEW_HEIGHT_SCRIPT</body></html>"""
+        """<!DOCTYPE html><html><head><meta name="viewport" content="width=device-width, initial-scale=1.0"></head><body style="margin:0;display:flex;justify-content:center;align-items:center;">$code</body></html>"""
     } else {
         val trimmed = code.trim()
         val hasViewport = trimmed.contains("name=\"viewport\"", ignoreCase = true)
         val isCompleteDoc = trimmed.startsWith("<!DOCTYPE", ignoreCase = true) ||
             trimmed.startsWith("<html", ignoreCase = true)
         when {
-            // 完整文档：按需补 viewport，并在 </body> 前嵌入测高脚本
-            isCompleteDoc -> {
-                var doc = code
-                if (!hasViewport) {
-                    doc = doc.replaceFirst(
-                        Regex("<head[^>]*>", RegexOption.IGNORE_CASE),
-                        "$0<meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">"
-                    )
-                }
-                if (doc.contains("</body>", ignoreCase = true)) {
-                    doc.replaceFirst(Regex("</body>", RegexOption.IGNORE_CASE), "$PREVIEW_HEIGHT_SCRIPT</body>")
-                } else {
-                    doc + PREVIEW_HEIGHT_SCRIPT
-                }
-            }
-            // HTML 片段：包裹成带 viewport 的完整文档 + 测高脚本
-            else -> """<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"></head><body style="margin:8px">$code$PREVIEW_HEIGHT_SCRIPT</body></html>"""
+            // 完整文档且已含 viewport：原样返回（WebView 自身可滚动，无需 overflow:hidden）
+            isCompleteDoc && hasViewport -> code
+            // 完整文档但缺 viewport：注入 viewport
+            isCompleteDoc -> code.replaceFirst(
+                Regex("<head[^>]*>", RegexOption.IGNORE_CASE),
+                "$0<meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">"
+            )
+            // HTML 片段：包裹成带 viewport 的完整文档
+            else -> """<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"></head><body style="margin:8px">$code</body></html>"""
         }
     }
 }
