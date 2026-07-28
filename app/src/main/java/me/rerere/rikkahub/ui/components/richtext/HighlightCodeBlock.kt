@@ -537,6 +537,12 @@ private fun CodeBlockPreview(
         onCreated = { webView ->
             // 强制 1:1 初始缩放，防止渲染后被自动压缩
             webView.setInitialScale(100)
+            // 关键：切断 WebView 的嵌套滚动协议。
+            // WebView 默认 isNestedScrollingEnabled=true，会通过 dispatchNestedScroll
+            // 把滚动主动上交给外层 LazyColumn，绕过 requestDisallowInterceptTouchEvent，
+            // 导致内部永远滚不动。必须关闭，让 WebView 自管滚动域。
+            // （与项目内 HtmlContent.kt 已验证的做法一致）
+            webView.isNestedScrollingEnabled = false
             // 方向感知手势：按滑动方向判断 WebView 是否还能继续滚，
             // 滚到顶/底立即把手势交还外层聊天列表，避免滚动死区
             var lastTouchY = 0f
