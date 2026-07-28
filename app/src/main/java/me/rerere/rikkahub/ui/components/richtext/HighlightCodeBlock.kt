@@ -482,63 +482,82 @@ private fun CodeBlockPreview(
     language: String,
     modifier: Modifier = Modifier,
 ) {
+    // 内容高度（CSS px，1:1 缩放下等同 dp）。0 = 尚未测到，先用占位高度
+    var contentHeightCssPx by remember(code, language) { mutableIntStateOf(0) }
+
+    val mainHandler = remember { android.os.Handler(android.os.Looper.getMainLooper()) }
+    // JS 回传高度的接口（与项目内 HtmlContent.kt 同款机制）
+    val heightInterface = remember(code, language) {
+        object {
+            @android.webkit.JavascriptInterface
+            fun postHeight(height: Int) {
+                if (height > 0) mainHandler.post { contentHeightCssPx = height }
+            }
+        }
+    }
+
     val state = rememberWebViewState(
         data = buildCodePreviewHtml(code = code, language = language),
         baseUrl = "https://rikkahub.local",
         mimeType = "text/html",
+        interfaces = mapOf("AndroidHeight" to heightInterface),
         settings = {
             builtInZoomControls = true
             displayZoomControls = false
-            // 关闭宽视口和概览缩放，内容按 1:1 渲染，不被缩小
+            // 1:1 渲染，不缩放（v4 已验证）
             useWideViewPort = false
             loadWithOverviewMode = false
         }
     )
 
-    // 固定预览高度（v4 已验证此方案渲染稳定可见）。
-    // 不再用 JS 动态测高——动态改高度会触发 WebView 重新布局并重算缩放，
-    // 导致内容被压缩到看不见。超出部分交给下面已修好的内部滚动处理。
+    // 页面加载后注入高度监听：ResizeObserver 持续测量内容高度并回传。
+    // 同时锁定 overflow:hidden —— WebView 自身不滚动，高度纯由内容撑开，
+    // 滚动完全交给外层 LazyColumn。这是防止"动态高度触发重算缩放→压缩"的关键。
+    LaunchedEffect(state.isLoading) {
+        if (!state.isLoading) {
+            state.webView?.evaluateJavascript(
+                """
+                (function(){
+                    try{
+                        document.documentElement.style.overflow='hidden';
+                        if(document.body) document.body.style.overflow='hidden';
+                    }catch(e){}
+                    if(window.__hObsInstalled) return;
+                    window.__hObsInstalled=true;
+                    var last=0, timer=null;
+                    function measure(){
+                        var h=Math.max(
+                            document.body?document.body.scrollHeight:0,
+                            document.documentElement?document.documentElement.scrollHeight:0
+                        );
+                        if(Math.abs(h-last)>=8){ last=h; AndroidHeight.postHeight(h); }
+                    }
+                    function deb(){ if(timer)clearTimeout(timer); timer=setTimeout(measure,150); }
+                    if(typeof ResizeObserver!=='undefined'){
+                        new ResizeObserver(deb).observe(document.documentElement);
+                    }
+                    window.addEventListener('load',measure,{passive:true});
+                    window.addEventListener('resize',measure,{passive:true});
+                    measure();
+                })();
+                """.trimIndent(), null
+            )
+        }
+    }
+
+    // 高度 = 内容高度（CSS px 直接当 dp）；未测到时用占位高度
+    val heightDp = if (contentHeightCssPx == 0) 220.dp else contentHeightCssPx.dp.coerceAtMost(4096.dp)
+
     WebView(
         state = state,
         modifier = modifier
             .clip(RoundedCornerShape(4.dp))
-            .height(400.dp),
+            .height(heightDp),
         onCreated = { webView ->
             // 强制 1:1 初始缩放，防止内容被压缩
             webView.setInitialScale(100)
-            // 切断 WebView 的嵌套滚动协议：默认开启时会通过 dispatchNestedScroll
-            // 把滚动主动上交给外层 LazyColumn（绕过 requestDisallowInterceptTouchEvent），
-            // 导致内部滚不动。关闭后 WebView 自管滚动域。（与 HtmlContent.kt 一致）
+            // 切断嵌套滚动协议（WebView 不自滚，但保险起见仍关闭，与 HtmlContent.kt 一致）
             webView.isNestedScrollingEnabled = false
-            // 方向感知手势：WebView 可滚时内部滚，滚到顶/底立即交还外层聊天列表
-            var lastTouchY = 0f
-            webView.setOnTouchListener { view, event ->
-                val wv = view as android.webkit.WebView
-                when (event.actionMasked) {
-                    MotionEvent.ACTION_DOWN -> {
-                        lastTouchY = event.y
-                        val hasScrollableContent =
-                            wv.canScrollVertically(-1) || wv.canScrollVertically(1)
-                        view.parent?.requestDisallowInterceptTouchEvent(hasScrollableContent)
-                    }
-                    MotionEvent.ACTION_MOVE -> {
-                        val fingerDeltaY = event.y - lastTouchY
-                        val canContinueScrolling = when {
-                            // 手指向下：WebView 需要能向上滚
-                            fingerDeltaY > 0 -> wv.canScrollVertically(-1)
-                            // 手指向上：WebView 需要能向下滚
-                            fingerDeltaY < 0 -> wv.canScrollVertically(1)
-                            else -> wv.canScrollVertically(-1) || wv.canScrollVertically(1)
-                        }
-                        view.parent?.requestDisallowInterceptTouchEvent(canContinueScrolling)
-                        lastTouchY = event.y
-                    }
-                    MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                        view.parent?.requestDisallowInterceptTouchEvent(false)
-                    }
-                }
-                false
-            }
         },
     )
 }
