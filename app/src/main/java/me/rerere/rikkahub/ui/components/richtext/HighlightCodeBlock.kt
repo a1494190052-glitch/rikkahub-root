@@ -2,6 +2,7 @@ package me.rerere.rikkahub.ui.components.richtext
 
 import android.content.ClipData
 import android.net.Uri
+import android.view.MotionEvent
 import androidx.activity.compose.ManagedActivityResultLauncher
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -28,7 +29,9 @@ import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -40,6 +43,7 @@ import androidx.compose.ui.platform.ClipEntry
 import androidx.compose.ui.platform.Clipboard
 import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextStyle
@@ -51,6 +55,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.datetime.TimeZone
@@ -492,12 +497,43 @@ private fun CodeBlockPreview(
         }
     )
 
+    val density = LocalDensity.current
+    // 内容实际高度（px），0 表示尚未测量
+    var contentHeightPx by remember(code, language) { mutableIntStateOf(0) }
+
+    // 页面加载完成后测量内容高度，让预览框自适应内容
+    LaunchedEffect(state.isLoading) {
+        if (!state.isLoading && contentHeightPx == 0) {
+            delay(180) // 等布局稳定
+            state.webView?.let { wv ->
+                val h = (wv.contentHeight * wv.scale).toInt()
+                if (h > 0) contentHeightPx = h
+            }
+        }
+    }
+
+    // 高度自适应内容，限制在合理区间
+    val fittedHeight = with(density) { contentHeightPx.toDp() }.coerceIn(140.dp, 520.dp)
+
     WebView(
         state = state,
-        modifier = modifier.clip(RoundedCornerShape(4.dp)),
+        modifier = modifier
+            .clip(RoundedCornerShape(4.dp))
+            .height(if (contentHeightPx == 0) 200.dp else fittedHeight),
         onCreated = { webView ->
             // 强制 1:1 初始缩放，防止渲染后被自动压缩
             webView.setInitialScale(100)
+            // 内容超出可视区时，允许 WebView 内部滚动（不被外层聊天列表抢走手势）
+            webView.setOnTouchListener { v, event ->
+                val wv = v as android.webkit.WebView
+                val canScroll = wv.contentHeight * wv.scale > wv.height
+                if (canScroll &&
+                    (event.action == MotionEvent.ACTION_DOWN || event.action == MotionEvent.ACTION_MOVE)
+                ) {
+                    v.parent?.requestDisallowInterceptTouchEvent(true)
+                }
+                false
+            }
         },
     )
 }
