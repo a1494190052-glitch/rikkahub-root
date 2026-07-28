@@ -511,46 +511,7 @@ private fun CodeBlockPreview(
         }
     )
 
-    // 页面加载后注入高度监听：ResizeObserver 持续测量内容高度并回传。
-    // 同时锁定 overflow:hidden —— WebView 自身不滚动，高度纯由内容撑开，
-    // 滚动完全交给外层 LazyColumn。这是防止"动态高度触发重算缩放→压缩"的关键。
-    LaunchedEffect(state.isLoading) {
-        if (!state.isLoading) {
-            state.webView?.evaluateJavascript(
-                """
-                (function(){
-                    try{
-                        document.documentElement.style.overflow='hidden';
-                        if(document.body) document.body.style.overflow='hidden';
-                    }catch(e){}
-                    console.error('[PREVIEW-DIAG] dpr='+window.devicePixelRatio
-                        +' innerW='+window.innerWidth+' innerH='+window.innerHeight
-                        +' docSH='+document.documentElement.scrollHeight
-                        +' bodySH='+(document.body?document.body.scrollHeight:0)
-                        +' docCH='+document.documentElement.clientHeight
-                        +' bodyCH='+(document.body?document.body.clientHeight:0));
-                    if(window.__hObsInstalled) return;
-                    window.__hObsInstalled=true;
-                    var last=0, timer=null;
-                    function measure(){
-                        var h=Math.max(
-                            document.body?document.body.scrollHeight:0,
-                            document.documentElement?document.documentElement.scrollHeight:0
-                        );
-                        if(Math.abs(h-last)>=8){ last=h; console.error('[PREVIEW-DIAG] postHeight h='+h); AndroidHeight.postHeight(h); }
-                    }
-                    function deb(){ if(timer)clearTimeout(timer); timer=setTimeout(measure,150); }
-                    if(typeof ResizeObserver!=='undefined'){
-                        new ResizeObserver(deb).observe(document.documentElement);
-                    }
-                    window.addEventListener('load',measure,{passive:true});
-                    window.addEventListener('resize',measure,{passive:true});
-                    measure();
-                })();
-                """.trimIndent(), null
-            )
-        }
-    }
+    // 测高脚本已内嵌在 HTML 文档里（buildCodePreviewHtml），页面加载即自动运行回传高度。
 
     // WebView 高度 = 内容全高（CSS px 直接当 dp），把它当成一张"长图"
     val webViewHeightDp = if (contentHeightCssPx == 0) 220.dp else contentHeightCssPx.dp.coerceAtMost(8000.dp)
@@ -578,24 +539,59 @@ private fun CodeBlockPreview(
     }
 }
 
+// 内嵌测高脚本：页面加载即运行，测量内容高度并通过 AndroidHeight 接口回传。
+// 直接写进 HTML 文档（而非 evaluateJavascript 注入），避免注入时机不可靠。
+private const val PREVIEW_HEIGHT_SCRIPT = """
+<script>
+(function(){
+  function measure(){
+    var h=Math.max(document.body?document.body.scrollHeight:0,document.documentElement?document.documentElement.scrollHeight:0);
+    try{console.error('[PREVIEW-DIAG] measure h='+h+' innerH='+window.innerHeight+' dpr='+window.devicePixelRatio+' readyState='+document.readyState);}catch(e){}
+    if(window.AndroidHeight&&h>0){AndroidHeight.postHeight(h);}
+  }
+  function init(){
+    try{document.documentElement.style.overflow='hidden';if(document.body)document.body.style.overflow='hidden';}catch(e){}
+    measure();
+    if(typeof ResizeObserver!=='undefined'){
+      var t=null;
+      new ResizeObserver(function(){if(t)clearTimeout(t);t=setTimeout(measure,120);}).observe(document.documentElement);
+    }
+    window.addEventListener('resize',measure);
+    setTimeout(measure,300);
+    setTimeout(measure,800);
+  }
+  if(document.readyState==='complete'){init();}
+  else{window.addEventListener('load',init);setTimeout(init,500);}
+})();
+</script>
+"""
+
 private fun buildCodePreviewHtml(code: String, language: String): String {
     return if (language == "svg") {
-        """<!DOCTYPE html><html><head><meta name="viewport" content="width=device-width, initial-scale=1.0"></head><body style="margin:0;display:flex;justify-content:center;align-items:center;min-height:100vh;">$code</body></html>"""
+        """<!DOCTYPE html><html><head><meta name="viewport" content="width=device-width, initial-scale=1.0"></head><body style="margin:0;display:flex;justify-content:center;align-items:center;">$code$PREVIEW_HEIGHT_SCRIPT</body></html>"""
     } else {
         val trimmed = code.trim()
         val hasViewport = trimmed.contains("name=\"viewport\"", ignoreCase = true)
         val isCompleteDoc = trimmed.startsWith("<!DOCTYPE", ignoreCase = true) ||
             trimmed.startsWith("<html", ignoreCase = true)
         when {
-            // 完整文档且已含 viewport：原样返回
-            isCompleteDoc && hasViewport -> code
-            // 完整文档但缺 viewport：注入 viewport，避免被当成宽页面缩放
-            isCompleteDoc -> code.replaceFirst(
-                Regex("<head[^>]*>", RegexOption.IGNORE_CASE),
-                "$0<meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">"
-            )
-            // HTML 片段：包裹成带 viewport 的完整文档
-            else -> """<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"></head><body style="margin:8px">$code</body></html>"""
+            // 完整文档：按需补 viewport，并在 </body> 前嵌入测高脚本
+            isCompleteDoc -> {
+                var doc = code
+                if (!hasViewport) {
+                    doc = doc.replaceFirst(
+                        Regex("<head[^>]*>", RegexOption.IGNORE_CASE),
+                        "$0<meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">"
+                    )
+                }
+                if (doc.contains("</body>", ignoreCase = true)) {
+                    doc.replaceFirst(Regex("</body>", RegexOption.IGNORE_CASE), "$PREVIEW_HEIGHT_SCRIPT</body>")
+                } else {
+                    doc + PREVIEW_HEIGHT_SCRIPT
+                }
+            }
+            // HTML 片段：包裹成带 viewport 的完整文档 + 测高脚本
+            else -> """<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"></head><body style="margin:8px">$code$PREVIEW_HEIGHT_SCRIPT</body></html>"""
         }
     }
 }
