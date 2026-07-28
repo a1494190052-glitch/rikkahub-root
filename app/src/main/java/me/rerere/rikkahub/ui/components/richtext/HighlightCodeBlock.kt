@@ -486,22 +486,10 @@ private fun CodeBlockPreview(
     // 内容高度（CSS px，1:1 缩放下等同 dp）。0 = 尚未测到，先用占位高度
     var contentHeightCssPx by remember(code, language) { mutableIntStateOf(0) }
 
-    val mainHandler = remember { android.os.Handler(android.os.Looper.getMainLooper()) }
-    // JS 回传高度的接口（与项目内 HtmlContent.kt 同款机制）
-    val heightInterface = remember(code, language) {
-        object {
-            @android.webkit.JavascriptInterface
-            fun postHeight(height: Int) {
-                if (height > 0) mainHandler.post { contentHeightCssPx = height }
-            }
-        }
-    }
-
     val state = rememberWebViewState(
         data = buildCodePreviewHtml(code = code, language = language),
         baseUrl = "https://rikkahub.local",
         mimeType = "text/html",
-        interfaces = mapOf("AndroidHeight" to heightInterface),
         settings = {
             builtInZoomControls = true
             displayZoomControls = false
@@ -511,15 +499,27 @@ private fun CodeBlockPreview(
         }
     )
 
-    // 测高脚本已内嵌在 HTML 文档里（buildCodePreviewHtml），页面加载即自动运行回传高度。
+    // 用 Android 原生 webView.contentHeight 测高：返回内容真实高度，不受视口高度影响，
+    // 不会像 JS scrollHeight 那样陷入"测高→设高→视口变高→再测更高"的反馈循环（曾飙到 32000 撑爆渲染）。
+    LaunchedEffect(state.isLoading) {
+        if (!state.isLoading) {
+            repeat(5) {
+                delay(180)
+                val wv = state.webView
+                if (wv != null) {
+                    val ch = (wv.contentHeight * wv.scale).toInt()
+                    if (ch > 0) contentHeightCssPx = ch
+                }
+            }
+        }
+    }
 
-    // WebView 高度 = 内容全高（CSS px 直接当 dp），把它当成一张"长图"
-    val webViewHeightDp = if (contentHeightCssPx == 0) 220.dp else contentHeightCssPx.dp.coerceAtMost(8000.dp)
+    // WebView 高度 = 内容全高，限制在合理区间（防异常值撑爆渲染纹理）
+    val webViewHeightDp = if (contentHeightCssPx == 0) 220.dp else contentHeightCssPx.dp.coerceIn(120.dp, 4000.dp)
     val scrollState = rememberScrollState()
 
     // 外面套一个固定高度的 Compose 滚动框：框内可上下滑动浏览 HTML，
     // 滑到边界后由 Compose 原生嵌套滚动自动接力给外层聊天列表（不冲突）。
-    // WebView 自身不滚动（高度=内容+overflow:hidden），只作为静态长图被滚动框承载。
     Box(
         modifier = modifier
             .clip(RoundedCornerShape(4.dp))
@@ -539,29 +539,17 @@ private fun CodeBlockPreview(
     }
 }
 
-// 内嵌测高脚本：页面加载即运行，测量内容高度并通过 AndroidHeight 接口回传。
-// 直接写进 HTML 文档（而非 evaluateJavascript 注入），避免注入时机不可靠。
+// 内嵌脚本：仅锁定 overflow:hidden（WebView 不自滚）+ 输出诊断，不做测高回传。
+// 测高改用 Android 原生 webView.contentHeight（不受视口高度影响，避免反馈循环飙到 32000）。
 private const val PREVIEW_HEIGHT_SCRIPT = """
 <script>
 (function(){
-  function measure(){
-    var h=Math.max(document.body?document.body.scrollHeight:0,document.documentElement?document.documentElement.scrollHeight:0);
-    try{console.error('[PREVIEW-DIAG] measure h='+h+' innerH='+window.innerHeight+' dpr='+window.devicePixelRatio+' readyState='+document.readyState);}catch(e){}
-    if(window.AndroidHeight&&h>0){AndroidHeight.postHeight(h);}
-  }
-  function init(){
+  function fix(){
     try{document.documentElement.style.overflow='hidden';if(document.body)document.body.style.overflow='hidden';}catch(e){}
-    measure();
-    if(typeof ResizeObserver!=='undefined'){
-      var t=null;
-      new ResizeObserver(function(){if(t)clearTimeout(t);t=setTimeout(measure,120);}).observe(document.documentElement);
-    }
-    window.addEventListener('resize',measure);
-    setTimeout(measure,300);
-    setTimeout(measure,800);
+    try{console.error('[PREVIEW-DIAG] bodySH='+(document.body?document.body.scrollHeight:0)+' docSH='+document.documentElement.scrollHeight+' innerH='+window.innerHeight);}catch(e){}
   }
-  if(document.readyState==='complete'){init();}
-  else{window.addEventListener('load',init);setTimeout(init,500);}
+  if(document.readyState==='complete'){fix();}else{window.addEventListener('load',fix);}
+  setTimeout(fix,300);
 })();
 </script>
 """
