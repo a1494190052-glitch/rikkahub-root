@@ -35,6 +35,7 @@ import me.rerere.rikkahub.data.files.FilesManager
 import me.rerere.rikkahub.data.datastore.SettingsStore
 import me.rerere.rikkahub.service.WebServerService
 import me.rerere.rikkahub.utils.CrashHandler
+import me.rerere.rikkahub.data.ai.CrashFrequencyDetector
 import me.rerere.rikkahub.utils.DatabaseUtil
 import me.rerere.rikkahub.data.repository.WorkspaceRepository
 import me.rerere.workspace.WorkspaceManager
@@ -91,6 +92,17 @@ class RikkaHubApp : Application() {
 
         // install crash handler
         CrashHandler.install(this)
+
+        // [CrashFrequencyDetector] Check safe mode on cold start (H-1b)
+        if (CrashFrequencyDetector.isSafeMode(this)) {
+            Log.w(TAG, "Safe mode active — performing recovery")
+            CrashFrequencyDetector.performSafeModeRecovery(this)
+        }
+
+        // Record successful startup: reset crash counter after stable run
+        android.os.Handler(mainLooper).postDelayed({
+            CrashFrequencyDetector.reset(this)
+        }, 10_000)  // 10 seconds stable = clear crash history
 
         // Init QuickJS native library
         QuickJSLoader.init()

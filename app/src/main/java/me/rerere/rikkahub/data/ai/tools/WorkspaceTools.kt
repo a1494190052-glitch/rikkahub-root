@@ -17,6 +17,7 @@ import me.rerere.ai.ui.DiffMetadata
 import me.rerere.ai.ui.UIMessagePart
 import me.rerere.ai.ui.toMetadata
 import me.rerere.rikkahub.data.ai.shell.BashismDetector
+import me.rerere.rikkahub.data.ai.shell.OnDemandBash
 import me.rerere.rikkahub.data.ai.tools.local.ShellRisk
 import me.rerere.rikkahub.data.ai.tools.local.ShellSafety
 import me.rerere.rikkahub.data.db.entity.ShellAuditEntity
@@ -149,7 +150,9 @@ private fun createRunCodeTool(
             "shell", "bash", "sh" -> "sh" to "bash"
             else -> error("unsupported language: $language (use python | javascript | shell)")
         }
-        val command = "echo '$b64' | base64 -d > /tmp/_runcode.$ext && $runner /tmp/_runcode.$ext"
+        val fileId = java.util.UUID.randomUUID().toString().take(8)
+        val tmpPath = "/tmp/_runcode_${fileId}.$ext"
+        val command = "echo '$b64' | base64 -d > $tmpPath && $runner $tmpPath; rc=\$?; rm -f $tmpPath; exit \$rc"
         val result = runInterruptible(Dispatchers.IO) {
             shellSessionManager.exec(workspaceId, command, shellCwd, 120_000L)
         }
@@ -421,7 +424,19 @@ private fun createShellTool(
         // T-bash-on-demand: detect bash-only syntax and wrap for bash when the
         // workspace shell is not root mode (proot Ubuntu may default to sh/dash).
         val bashismResult = if (!rootMode) BashismDetector.detect(command) else BashismDetector.Result(emptyList())
-        val bashWrapped = bashismResult.mustSwitchInterpreter
+        var bashWrapped = bashismResult.mustSwitchInterpreter
+        if (bashWrapped) {
+            // Ensure bash is actually available before wrapping (H-1a: wire OnDemandBash)
+            val appContext = getKoin().get<android.content.Context>()
+            val bashOutcome = OnDemandBash.ensureBash(appContext) { cmd, timeoutMs ->
+                val r = workspaceRepository.executeCommand(workspaceId, cmd, "", timeoutMs)
+                r.exitCode
+            }
+            if (bashOutcome is OnDemandBash.Outcome.Unavailable) {
+                // bash unavailable — fall back to sh with a reminder instead of wrapping
+                bashWrapped = false
+            }
+        }
         val effectiveCommand = if (bashWrapped) {
             // Base64-wrap to avoid all quoting issues: echo '<b64>' | base64 -d | bash
             val b64 = java.util.Base64.getEncoder().encodeToString(command.toByteArray(Charsets.UTF_8))
@@ -801,6 +816,13 @@ private fun kotlinx.serialization.json.JsonElement.pathOutsideWritableRoots(name
 
 private fun String.isOutsideWritableRoots(): Boolean {
     val normalized = trimEnd('/').ifBlank { "/" }
+    // Reject path traversal: any ".." segment is suspicious; verify canonical path stays in bounds
+    if (normalized.contains("..")) {
+        val canonical = java.io.File(normalized).canonicalPath
+        return WRITABLE_ROOT_PREFIXES.none { prefix ->
+            canonical == prefix || canonical.startsWith("$prefix/")
+        }
+    }
     return WRITABLE_ROOT_PREFIXES.none { prefix ->
         normalized == prefix || normalized.startsWith("$prefix/")
     }

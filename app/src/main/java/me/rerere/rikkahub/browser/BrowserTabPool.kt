@@ -8,6 +8,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -433,19 +434,21 @@ class BrowserTabPool(private val context: Context) {
             // and dispatched on, NOT the global selectedTabId.
             stampTabId(result.copy(pageURL = tab.manager.currentURL.value), tab.id)
         } finally {
-            tab.lastActivityDate = Date()
-            if (implicitTab) {
-                // Keep the tab marked inUse through a grace window instead of
-                // releasing it the instant the action returns.
-                armImplicitGraceRelease(tab)
-            } else {
-                // Explicit tab_id path keeps the original immediate release — its
-                // serialization is the per-tab Mutex (executeSerialized).
-                tab.inUseGraceJob?.cancel()
-                tab.inUseGraceJob = null
-                tab.inUse = false
+            withContext(Dispatchers.Main) {
+                tab.lastActivityDate = Date()
+                if (implicitTab) {
+                    // Keep the tab marked inUse through a grace window instead of
+                    // releasing it the instant the action returns.
+                    armImplicitGraceRelease(tab)
+                } else {
+                    // Explicit tab_id path keeps the original immediate release — its
+                    // serialization is the per-tab Mutex (executeSerialized).
+                    tab.inUseGraceJob?.cancel()
+                    tab.inUseGraceJob = null
+                    tab.inUse = false
+                }
+                updateTabs()
             }
-            updateTabs()
             saveState()
         }
     }
@@ -507,7 +510,7 @@ class BrowserTabPool(private val context: Context) {
             // (up to MAX_TABS). When every tab is busy AND we're at MAX_TABS,
             // wait (bounded) for a tab to free up; only fall back to reusing
             // the least-recently-active tab if nothing frees within the window.
-            var picked = currentTabs.firstOrNull { !it.inUse } ?: createTab(currentTabs)
+            var picked = currentTabs.firstOrNull { !it.inUse }?.also { it.inUse = true } ?: createTab(currentTabs)
             if (picked == null) {
                 val waitDeadline = IMPLICIT_TAB_WAIT_MS
                 var waited = 0L
@@ -515,7 +518,7 @@ class BrowserTabPool(private val context: Context) {
                     delay(IMPLICIT_TAB_WAIT_POLL_MS)
                     waited += IMPLICIT_TAB_WAIT_POLL_MS
                     currentTabs = _tabs.value.toMutableList()
-                    picked = currentTabs.firstOrNull { !it.inUse } ?: createTab(currentTabs)
+                    picked = currentTabs.firstOrNull { !it.inUse }?.also { it.inUse = true } ?: createTab(currentTabs)
                     if (picked != null) break
                 }
             }
@@ -606,6 +609,7 @@ class BrowserTabPool(private val context: Context) {
         val idx = currentTabs.indexOfFirst { it.id == id }
         if (idx < 0) return@withContext BrowserActionResult.error("Tab $id not found")
 
+        val tab = currentTabs[idx]
         currentTabs.removeAt(idx)
         _tabs.value = currentTabs
 
@@ -614,6 +618,7 @@ class BrowserTabPool(private val context: Context) {
             _selectedTabId.value = currentTabs.first().id
         }
         saveState()
+        destroyTab(tab)
         BrowserActionResult(text = "Closed tab $id")
     }
 
@@ -668,12 +673,17 @@ class BrowserTabPool(private val context: Context) {
         val currentTabs = _tabs.value.toMutableList()
         val idx = currentTabs.indexOfFirst { it.manager === manager }
         if (idx >= 0) {
-            val closedId = currentTabs[idx].id
+            val tab = currentTabs[idx]
+            val closedId = tab.id
             currentTabs.removeAt(idx)
             _tabs.value = currentTabs
             if (_selectedTabId.value == closedId && currentTabs.isNotEmpty()) {
                 _selectedTabId.value = currentTabs.first().id
             }
+            // Destroy the WebView (already on main thread)
+            tab.inUseGraceJob?.cancel()
+            manager.destroy()
+            tabLocks.remove(closedId)
             Log.i(TAG, "window.close → removed tab $closedId")
         }
     }
@@ -706,12 +716,14 @@ class BrowserTabPool(private val context: Context) {
         val currentTabs = _tabs.value.toMutableList()
         val idx = currentTabs.indexOfFirst { it.id == tabId }
         if (idx < 0) return@withContext
+        val tab = currentTabs[idx]
         currentTabs.removeAt(idx)
         _tabs.value = currentTabs
         if (_selectedTabId.value == tabId && currentTabs.isNotEmpty()) {
             _selectedTabId.value = currentTabs.first().id
         }
         saveState()
+        destroyTab(tab)
     }
 
     /**
@@ -801,6 +813,10 @@ class BrowserTabPool(private val context: Context) {
             val url = tab.manager.currentURL.value
             if (url.isNotEmpty()) savedURLs[tab.id] = url
             currentTabs.remove(tab)
+            // Destroy the WebView (already on main thread)
+            tab.inUseGraceJob?.cancel()
+            tab.manager.destroy()
+            tabLocks.remove(tab.id)
             Log.i(TAG, "Evicted idle tab ${tab.id}")
         }
         if (toRemove.isNotEmpty()) {
@@ -966,5 +982,33 @@ class BrowserTabPool(private val context: Context) {
 
     private fun updateTabs() {
         _tabs.value = _tabs.value.toList()
+    }
+
+    /**
+     * Destroy a single tab's WebView and clean up its serial lock.
+     * Must be called with the tab already removed from [currentTabs].
+     */
+    private suspend fun destroyTab(tab: Tab) {
+        withContext(Dispatchers.Main) {
+            tab.inUseGraceJob?.cancel()
+            tab.manager.destroy()
+        }
+        tabLocks.remove(tab.id)
+    }
+
+    /**
+     * Shut down the entire tab pool. Destroys all tabs, cancels all scopes.
+     */
+    suspend fun close() {
+        evictionJob?.cancel()
+        // Destroy all tabs
+        val tabsCopy = _tabs.value.toList()
+        for (tab in tabsCopy) {
+            destroyTab(tab)
+        }
+        _tabs.value = emptyList()
+        evictionScope.cancel()
+        downloadScope.cancel()
+        tabLocks.clear()
     }
 }

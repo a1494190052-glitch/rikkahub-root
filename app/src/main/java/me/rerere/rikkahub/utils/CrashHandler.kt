@@ -3,6 +3,7 @@ package me.rerere.rikkahub.utils
 import android.content.Context
 import android.util.Log
 import androidx.core.content.edit
+import me.rerere.rikkahub.data.ai.CrashFrequencyDetector
 
 private const val TAG = "CrashHandler"
 private const val PREFS_NAME = "crash_handler"
@@ -31,6 +32,8 @@ object CrashHandler {
         Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
             Log.e(TAG, "Uncaught exception on thread ${thread.name}", throwable)
             markCrashed(appContext, thread, throwable)
+            // [CrashFrequencyDetector] Record crash for safe-mode detection (H-1b)
+            CrashFrequencyDetector.recordCrash(appContext)
             defaultHandler?.uncaughtException(thread, throwable)
         }
     }

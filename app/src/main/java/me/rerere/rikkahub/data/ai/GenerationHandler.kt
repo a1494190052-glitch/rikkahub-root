@@ -42,6 +42,7 @@ import me.rerere.rikkahub.data.ai.transformers.onGenerationFinish
 import me.rerere.rikkahub.data.ai.transformers.transforms
 import me.rerere.rikkahub.data.ai.transformers.visualTransforms
 import me.rerere.rikkahub.data.ai.tools.buildMemoryTools
+import me.rerere.rikkahub.service.LiveUpdateManager
 import me.rerere.rikkahub.data.datastore.Settings
 import me.rerere.rikkahub.data.datastore.findModelById
 import me.rerere.rikkahub.data.datastore.findProvider
@@ -91,6 +92,9 @@ class GenerationHandler(
     ): Flow<GenerationChunk> = flow {
         val provider = model.findProvider(settings.providers) ?: error("Provider not found")
         val providerImpl = providerManager.getProviderByType(provider)
+
+        // [LiveUpdateManager] Show agent status notification (H-1c)
+        LiveUpdateManager.updateStatus(context, "Agent thinking...", null)
 
         var messages: List<UIMessage> = messages
 
@@ -264,6 +268,19 @@ class GenerationHandler(
             // 结果按 toolCallId 匹配回填, 与顺序无关; 任一工具抛 CancellationException 时
             // coroutineScope 会取消其余工具并向上传播(用户停止生成).
             val hasShellAccess = toolsInternal.any { it.name == "workspace_shell" }
+
+            // [ToolLoopDetector] Sequential pre-check BEFORE parallel execution
+            val blockedTools = mutableSetOf<String>()  // toolCallIds to block
+            for (tool in toolsToProcess) {
+                if (tool.approvalState is ToolApprovalState.Approved || tool.approvalState is ToolApprovalState.Auto) {
+                    val loopCheck = loopDetector.check(tool.toolName, tool.input.ifBlank { "{}" })
+                    if (loopCheck.level == LoopLevel.CRITICAL) {
+                        Log.w(TAG, "ToolLoopDetector BLOCKED ${tool.toolName}: ${loopCheck.message}")
+                        blockedTools.add(tool.toolCallId)
+                    }
+                }
+            }
+
             val executedTools = coroutineScope {
                 toolsToProcess.map { tool ->
                     async {
@@ -305,15 +322,12 @@ class GenerationHandler(
                             else -> {
                                 // Auto or Approved - execute the tool
 
-                                // [ToolLoopDetector] Pre-execution check —
-                                // CRITICAL blocks execution entirely.
-                                val loopCheck = loopDetector.check(tool.toolName, tool.input.ifBlank { "{}" })
-                                if (loopCheck.level == LoopLevel.CRITICAL) {
-                                    Log.w(TAG, "ToolLoopDetector BLOCKED ${tool.toolName}: ${loopCheck.message}")
+                                // [ToolLoopDetector] Check if this tool was blocked by sequential pre-check
+                                if (tool.toolCallId in blockedTools) {
                                     return@async tool.copy(
                                         output = listOf(UIMessagePart.Text(
                                             json.encodeToString(buildJsonObject {
-                                                put("error", JsonPrimitive(loopCheck.message ?: "Tool call blocked by loop detector"))
+                                                put("error", JsonPrimitive("[LOOP BLOCKED] Tool call blocked by loop detector. Stop repeating this call."))
                                             })
                                         ))
                                     )
@@ -330,37 +344,13 @@ class GenerationHandler(
                                     Log.i(TAG, "generateText: executing tool ${toolDef.name} with args: $args")
                                     val result = toolDef.execute(args)
 
-                                    // [ToolLoopDetector] Post-execution record —
-                                    // append WARNING to output if detected.
-                                    val resultText = result.filterIsInstance<UIMessagePart.Text>()
-                                        .joinToString("\n") { it.text }
-                                    val postCheck = loopDetector.record(
-                                        toolName = tool.toolName,
-                                        argsJson = tool.input.ifBlank { "{}" },
-                                        result = resultText.take(2000),
-                                    )
-                                    val warningSuffix = if (postCheck.level == LoopLevel.WARNING) {
-                                        "\n\n${postCheck.message}"
-                                    } else ""
-
                                     tool.copy(
-                                        output = maybeTruncateToolOutput(tool.toolCallId, result, hasShellAccess).let { parts ->
-                                            if (warningSuffix.isNotEmpty()) {
-                                                parts + UIMessagePart.Text(warningSuffix)
-                                            } else parts
-                                        }
+                                        output = maybeTruncateToolOutput(tool.toolCallId, result, hasShellAccess)
                                     )
                                 }.getOrElse {
                                     // 取消必须向上传播，否则停止生成会被误报为工具执行错误
                                     if (it is CancellationException) throw it
                                     it.printStackTrace()
-                                    // [ToolLoopDetector] Record failed execution
-                                    loopDetector.record(
-                                        toolName = tool.toolName,
-                                        argsJson = tool.input.ifBlank { "{}" },
-                                        result = null,
-                                        errorMessage = it.message,
-                                    )
                                     tool.copy(
                                         output = listOf(
                                             UIMessagePart.Text(
@@ -383,6 +373,19 @@ class GenerationHandler(
                         }
                     }
                 }.map { it.await() }.filterNotNull()
+            }
+
+            // [ToolLoopDetector] Sequential post-record AFTER parallel execution
+            for (executedTool in executedTools) {
+                val resultText = executedTool.output.filterIsInstance<UIMessagePart.Text>()
+                    .joinToString("\n") { it.text }
+                val isError = resultText.contains("\"error\"")
+                loopDetector.record(
+                    toolName = executedTool.toolName,
+                    argsJson = executedTool.input.ifBlank { "{}" },
+                    result = if (isError) null else resultText.take(2000),
+                    errorMessage = if (isError) resultText.take(500) else null,
+                )
             }
 
             if (executedTools.isEmpty()) {
@@ -410,6 +413,9 @@ class GenerationHandler(
                 )
             )
         }
+
+        // [LiveUpdateManager] Dismiss notification when generation completes (H-1c)
+        LiveUpdateManager.dismiss(context)
 
     }.flowOn(Dispatchers.IO)
 

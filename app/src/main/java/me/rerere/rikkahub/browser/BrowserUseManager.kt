@@ -340,13 +340,25 @@ class BrowserUseManager(
                 // of the WebView so they reach the matching app instead of
                 // surfacing as ERR_UNKNOWN_URL_SCHEME.
                 val url = request.url?.toString() ?: return false
-                if (url.startsWith("intent:") || url.startsWith("market:") || url.startsWith("tel:") || url.startsWith("mailto:")) {
+                if (url.startsWith("intent:")) {
                     try {
-                        val intent = if (url.startsWith("intent:")) {
-                            android.content.Intent.parseUri(url, android.content.Intent.URI_INTENT_SCHEME)
-                        } else {
-                            android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(url))
+                        val intent = android.content.Intent.parseUri(url, android.content.Intent.URI_INTENT_SCHEME)
+                        // Sanitize: prevent arbitrary component launching (H-4)
+                        intent.selector = null
+                        intent.component = null
+                        // Only allow ACTION_VIEW with safe schemes
+                        if (intent.action == android.content.Intent.ACTION_VIEW) {
+                            val data = intent.data
+                            if (data != null && (data.scheme == "http" || data.scheme == "https" || data.scheme == "market")) {
+                                view.context.startActivity(intent)
+                            }
                         }
+                    } catch (_: Exception) {}
+                    return true
+                }
+                if (url.startsWith("market:") || url.startsWith("tel:") || url.startsWith("mailto:")) {
+                    try {
+                        val intent = android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(url))
                         view.context.startActivity(intent)
                     } catch (_: Exception) {}
                     return true
@@ -1631,6 +1643,19 @@ class BrowserUseManager(
             }
         }.trimEnd()
         return BrowserActionResult(text = text)
+    }
+
+    /**
+     * Release all resources held by this browser instance.
+     * Must be called on the main thread.
+     */
+    fun destroy() {
+        webView.stopLoading()
+        webView.loadUrl("about:blank")
+        (webView.parent as? android.view.ViewGroup)?.removeView(webView)
+        webView.removeAllViews()
+        webView.removeJavascriptInterface("__rikkahub__")
+        webView.destroy()
     }
 
 }
