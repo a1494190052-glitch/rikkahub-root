@@ -522,6 +522,12 @@ private fun CodeBlockPreview(
                         document.documentElement.style.overflow='hidden';
                         if(document.body) document.body.style.overflow='hidden';
                     }catch(e){}
+                    console.error('[PREVIEW-DIAG] dpr='+window.devicePixelRatio
+                        +' innerW='+window.innerWidth+' innerH='+window.innerHeight
+                        +' docSH='+document.documentElement.scrollHeight
+                        +' bodySH='+(document.body?document.body.scrollHeight:0)
+                        +' docCH='+document.documentElement.clientHeight
+                        +' bodyCH='+(document.body?document.body.clientHeight:0));
                     if(window.__hObsInstalled) return;
                     window.__hObsInstalled=true;
                     var last=0, timer=null;
@@ -530,7 +536,7 @@ private fun CodeBlockPreview(
                             document.body?document.body.scrollHeight:0,
                             document.documentElement?document.documentElement.scrollHeight:0
                         );
-                        if(Math.abs(h-last)>=8){ last=h; AndroidHeight.postHeight(h); }
+                        if(Math.abs(h-last)>=8){ last=h; console.error('[PREVIEW-DIAG] postHeight h='+h); AndroidHeight.postHeight(h); }
                     }
                     function deb(){ if(timer)clearTimeout(timer); timer=setTimeout(measure,150); }
                     if(typeof ResizeObserver!=='undefined'){
