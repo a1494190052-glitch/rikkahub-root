@@ -82,7 +82,7 @@ $profileListText
                 properties = buildJsonObject {
                     put("profile_name", buildJsonObject {
                         put("type", "string")
-                        put("description", "The subagent profile to spawn.")
+                        put("description", "**REQUIRED** — The subagent profile to spawn. Must be one of the enum values listed below. If omitted, will default to the first available profile.")
                         put("enum", kotlinx.serialization.json.buildJsonArray { profileNames.forEach { add(it) } })
                     })
                     put("task", buildJsonObject {
@@ -99,7 +99,9 @@ $profileListText
         },
         execute = { args ->
             val params = args.jsonObject
-            val profileName = params["profile_name"]?.jsonPrimitive?.contentOrNull ?: error("profile_name is required")
+            val profileName = params["profile_name"]?.jsonPrimitive?.contentOrNull
+                ?: profileNames.firstOrNull()
+                ?: error("profile_name is required")
             val task = params["task"]?.jsonPrimitive?.contentOrNull ?: error("task is required")
             val description = params["description"]?.jsonPrimitive?.contentOrNull.orEmpty()
             val result = spawn(profileName, task, description)
