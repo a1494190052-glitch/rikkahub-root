@@ -174,9 +174,7 @@ fun HighlightCodeBlock(
                     CodeBlockPreview(
                         code = code,
                         language = normalizedLanguage,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(200.dp),
+                        modifier = Modifier.fillMaxWidth(),
                     )
                 }
                 completeCodeBlock && normalizedLanguage == "mermaid" -> {
@@ -497,23 +495,31 @@ private fun CodeBlockPreview(
         }
     )
 
-    val density = LocalDensity.current
-    // 内容实际高度（px），0 表示尚未测量
-    var contentHeightPx by remember(code, language) { mutableIntStateOf(0) }
+    // 内容高度（CSS px，等同 dp），0 表示尚未测量
+    var contentHeightCssPx by remember(code, language) { mutableIntStateOf(0) }
 
-    // 页面加载完成后用 JS 精确测量内容高度，让预览框自适应内容
+    // 页面加载完成后用 JS 测量内容高度。
+    // scrollHeight 返回的是 CSS px，基本等同 dp，直接按 dp 使用，不要再换算。
     LaunchedEffect(state.isLoading) {
         if (!state.isLoading) {
-            // 多次测量，等布局稳定后取到准确高度
             repeat(3) {
                 delay(160)
                 state.webView?.evaluateJavascript(
-                    "Math.max(document.body.scrollHeight,document.documentElement.scrollHeight)"
+                    """
+                    Math.ceil(Math.max(
+                        document.body?.scrollHeight || 0,
+                        document.documentElement?.scrollHeight || 0
+                    ))
+                    """.trimIndent()
                 ) { result ->
-                    val cssPx = result?.trim()?.removeSurrounding("\"")?.toFloatOrNull()?.toInt() ?: 0
-                    if (cssPx > 0) {
-                        val scale = state.webView?.scale ?: 1f
-                        contentHeightPx = (cssPx * scale).toInt()
+                    val height = result
+                        ?.trim()
+                        ?.removeSurrounding("\"")
+                        ?.toFloatOrNull()
+                        ?.toInt()
+                        ?: 0
+                    if (height > 0) {
+                        contentHeightCssPx = height
                     }
                 }
             }
@@ -521,27 +527,42 @@ private fun CodeBlockPreview(
     }
 
     // 高度自适应内容，限制在合理区间
-    val fittedHeight = with(density) { contentHeightPx.toDp() }.coerceIn(140.dp, 560.dp)
+    val fittedHeight = contentHeightCssPx.dp.coerceIn(140.dp, 560.dp)
 
     WebView(
         state = state,
         modifier = modifier
             .clip(RoundedCornerShape(4.dp))
-            .height(if (contentHeightPx == 0) 220.dp else fittedHeight),
+            .height(if (contentHeightCssPx == 0) 220.dp else fittedHeight),
         onCreated = { webView ->
             // 强制 1:1 初始缩放，防止渲染后被自动压缩
             webView.setInitialScale(100)
-            // 智能手势：仅当 WebView 自身可滚动时才拦截手势（内部滚动），
-            // 否则交还给外层聊天列表，避免"内外都滑不动"的死区
-            webView.setOnTouchListener { v, event ->
-                val wv = v as android.webkit.WebView
-                when (event.action) {
+            // 方向感知手势：按滑动方向判断 WebView 是否还能继续滚，
+            // 滚到顶/底立即把手势交还外层聊天列表，避免滚动死区
+            var lastTouchY = 0f
+            webView.setOnTouchListener { view, event ->
+                val wv = view as android.webkit.WebView
+                when (event.actionMasked) {
                     MotionEvent.ACTION_DOWN -> {
-                        val canScroll = wv.canScrollVertically(-1) || wv.canScrollVertically(1)
-                        v.parent?.requestDisallowInterceptTouchEvent(canScroll)
+                        lastTouchY = event.y
+                        val hasScrollableContent =
+                            wv.canScrollVertically(-1) || wv.canScrollVertically(1)
+                        view.parent?.requestDisallowInterceptTouchEvent(hasScrollableContent)
+                    }
+                    MotionEvent.ACTION_MOVE -> {
+                        val fingerDeltaY = event.y - lastTouchY
+                        val canContinueScrolling = when {
+                            // 手指向下：WebView 需要能向上滚
+                            fingerDeltaY > 0 -> wv.canScrollVertically(-1)
+                            // 手指向上：WebView 需要能向下滚
+                            fingerDeltaY < 0 -> wv.canScrollVertically(1)
+                            else -> wv.canScrollVertically(-1) || wv.canScrollVertically(1)
+                        }
+                        view.parent?.requestDisallowInterceptTouchEvent(canContinueScrolling)
+                        lastTouchY = event.y
                     }
                     MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                        v.parent?.requestDisallowInterceptTouchEvent(false)
+                        view.parent?.requestDisallowInterceptTouchEvent(false)
                     }
                 }
                 false
