@@ -533,23 +533,24 @@ private fun CodeBlockPreview(
 }
 
 private fun buildCodePreviewHtml(code: String, language: String): String {
+    // 临时诊断：仅打印窗口/内容高度，不修改任何布局
+    val diag = """<script>setTimeout(function(){try{console.error('[PREVIEW] innerH='+window.innerHeight+' bodySH='+(document.body?document.body.scrollHeight:0)+' docSH='+document.documentElement.scrollHeight+' dpr='+window.devicePixelRatio);}catch(e){}},600);</script>"""
     return if (language == "svg") {
-        """<!DOCTYPE html><html><head><meta name="viewport" content="width=device-width, initial-scale=1.0"></head><body style="margin:0;display:flex;justify-content:center;align-items:center;">$code</body></html>"""
+        """<!DOCTYPE html><html><head><meta name="viewport" content="width=device-width, initial-scale=1.0"></head><body style="margin:0;display:flex;justify-content:center;align-items:center;">$code$diag</body></html>"""
     } else {
         val trimmed = code.trim()
         val hasViewport = trimmed.contains("name=\"viewport\"", ignoreCase = true)
         val isCompleteDoc = trimmed.startsWith("<!DOCTYPE", ignoreCase = true) ||
             trimmed.startsWith("<html", ignoreCase = true)
         when {
-            // 完整文档且已含 viewport：原样返回（WebView 自身可滚动，无需 overflow:hidden）
-            isCompleteDoc && hasViewport -> code
-            // 完整文档但缺 viewport：注入 viewport
+            isCompleteDoc && hasViewport -> {
+                if (code.contains("</body>", ignoreCase = true)) code.replaceFirst(Regex("</body>", RegexOption.IGNORE_CASE), "$diag</body>") else code + diag
+            }
             isCompleteDoc -> code.replaceFirst(
                 Regex("<head[^>]*>", RegexOption.IGNORE_CASE),
                 "$0<meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">"
-            )
-            // HTML 片段：包裹成带 viewport 的完整文档
-            else -> """<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"></head><body style="margin:8px">$code</body></html>"""
+            ).let { if (it.contains("</body>", ignoreCase = true)) it.replaceFirst(Regex("</body>", RegexOption.IGNORE_CASE), "$diag</body>") else it + diag }
+            else -> """<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"></head><body style="margin:8px">$code$diag</body></html>"""
         }
     }
 }
