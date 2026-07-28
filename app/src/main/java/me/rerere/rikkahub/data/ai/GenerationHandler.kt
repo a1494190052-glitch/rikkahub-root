@@ -94,6 +94,11 @@ class GenerationHandler(
 
         var messages: List<UIMessage> = messages
 
+        // [ToolLoopDetector] Per-generation loop detector — prevents agent
+        // tool-call loops (hallucinated tools, infinite polls, repeated calls).
+        // Ported from OpenMinis.
+        val loopDetector = ToolLoopDetector(json = json)
+
         for (stepIndex in 0 until maxSteps) {
             Log.i(TAG, "streamText: start step #$stepIndex (${model.id})")
 
@@ -299,6 +304,21 @@ class GenerationHandler(
 
                             else -> {
                                 // Auto or Approved - execute the tool
+
+                                // [ToolLoopDetector] Pre-execution check —
+                                // CRITICAL blocks execution entirely.
+                                val loopCheck = loopDetector.check(tool.toolName, tool.input.ifBlank { "{}" })
+                                if (loopCheck.level == LoopLevel.CRITICAL) {
+                                    Log.w(TAG, "ToolLoopDetector BLOCKED ${tool.toolName}: ${loopCheck.message}")
+                                    return@async tool.copy(
+                                        output = listOf(UIMessagePart.Text(
+                                            json.encodeToString(buildJsonObject {
+                                                put("error", JsonPrimitive(loopCheck.message ?: "Tool call blocked by loop detector"))
+                                            })
+                                        ))
+                                    )
+                                }
+
                                 runCatching {
                                     val toolDef = toolsInternal.find { toolDef -> toolDef.name == tool.toolName }
                                         ?: error("Tool ${tool.toolName} not found")
@@ -309,13 +329,38 @@ class GenerationHandler(
                                     }
                                     Log.i(TAG, "generateText: executing tool ${toolDef.name} with args: $args")
                                     val result = toolDef.execute(args)
+
+                                    // [ToolLoopDetector] Post-execution record —
+                                    // append WARNING to output if detected.
+                                    val resultText = result.filterIsInstance<UIMessagePart.Text>()
+                                        .joinToString("\n") { it.text }
+                                    val postCheck = loopDetector.record(
+                                        toolName = tool.toolName,
+                                        argsJson = tool.input.ifBlank { "{}" },
+                                        result = resultText.take(2000),
+                                    )
+                                    val warningSuffix = if (postCheck.level == LoopLevel.WARNING) {
+                                        "\n\n${postCheck.message}"
+                                    } else ""
+
                                     tool.copy(
-                                        output = maybeTruncateToolOutput(tool.toolCallId, result, hasShellAccess)
+                                        output = maybeTruncateToolOutput(tool.toolCallId, result, hasShellAccess).let { parts ->
+                                            if (warningSuffix.isNotEmpty()) {
+                                                parts + UIMessagePart.Text(warningSuffix)
+                                            } else parts
+                                        }
                                     )
                                 }.getOrElse {
                                     // 取消必须向上传播，否则停止生成会被误报为工具执行错误
                                     if (it is CancellationException) throw it
                                     it.printStackTrace()
+                                    // [ToolLoopDetector] Record failed execution
+                                    loopDetector.record(
+                                        toolName = tool.toolName,
+                                        argsJson = tool.input.ifBlank { "{}" },
+                                        result = null,
+                                        errorMessage = it.message,
+                                    )
                                     tool.copy(
                                         output = listOf(
                                             UIMessagePart.Text(

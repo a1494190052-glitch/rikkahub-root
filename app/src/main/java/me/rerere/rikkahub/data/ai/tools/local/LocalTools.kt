@@ -17,6 +17,8 @@ import me.rerere.rikkahub.data.ai.tools.createGetVolumeTool
 import me.rerere.rikkahub.data.ai.tools.createSetVolumeTool
 import me.rerere.rikkahub.data.ai.tools.createWakeScreenTool
 import me.rerere.rikkahub.data.ai.tools.createWifiInfoTool
+import me.rerere.rikkahub.browser.BrowserTabPool
+import me.rerere.rikkahub.browser.createBrowserUseTool
 import me.rerere.rikkahub.data.datastore.SettingsStore
 import me.rerere.rikkahub.data.event.AppEventBus
 import me.rerere.tts.provider.TTSManager
@@ -103,6 +105,7 @@ class LocalTools(
         if (options.contains(LocalToolOption.PostNotification)) tools.add(notificationPostTool)
         if (options.contains(LocalToolOption.Share)) tools.add(shareTool)
         if (options.contains(LocalToolOption.ScanMedia)) tools.add(mediaScannerTool)
+        if (options.contains(LocalToolOption.BrowserUse)) browserUseTool?.let { tools.add(it) }
 
         // Plugin tools: merge tools from loaded plugins
         if (!isSubAgent && pluginManager != null) {

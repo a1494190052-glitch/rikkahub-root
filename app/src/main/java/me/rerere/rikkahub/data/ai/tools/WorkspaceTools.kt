@@ -16,6 +16,7 @@ import me.rerere.ai.core.Tool
 import me.rerere.ai.ui.DiffMetadata
 import me.rerere.ai.ui.UIMessagePart
 import me.rerere.ai.ui.toMetadata
+import me.rerere.rikkahub.data.ai.shell.BashismDetector
 import me.rerere.rikkahub.data.ai.tools.local.ShellRisk
 import me.rerere.rikkahub.data.ai.tools.local.ShellSafety
 import me.rerere.rikkahub.data.db.entity.ShellAuditEntity
@@ -417,6 +418,18 @@ private fun createShellTool(
             )
         }
 
+        // T-bash-on-demand: detect bash-only syntax and wrap for bash when the
+        // workspace shell is not root mode (proot Ubuntu may default to sh/dash).
+        val bashismResult = if (!rootMode) BashismDetector.detect(command) else BashismDetector.Result(emptyList())
+        val bashWrapped = bashismResult.mustSwitchInterpreter
+        val effectiveCommand = if (bashWrapped) {
+            // Base64-wrap to avoid all quoting issues: echo '<b64>' | base64 -d | bash
+            val b64 = java.util.Base64.getEncoder().encodeToString(command.toByteArray(Charsets.UTF_8))
+            "echo '$b64' | base64 -d | bash"
+        } else {
+            command
+        }
+
         val useSession = !fresh && shellSessionManager != null
         // 持久模式: 仅当 AI 显式传 cwd 或会话刚创建时 cd, 否则保持会话当前目录
         val effectiveCwd = when {
@@ -435,10 +448,10 @@ private fun createShellTool(
         val result = try {
             if (useSession) {
                 runInterruptible(Dispatchers.IO) {
-                    shellSessionManager!!.exec(workspaceId, command, effectiveCwd, timeoutMillis)
+                    shellSessionManager!!.exec(workspaceId, effectiveCommand, effectiveCwd, timeoutMillis)
                 }
             } else {
-                workspaceRepository.executeCommand(workspaceId, command, effectiveCwd.orEmpty(), timeoutMillis)
+                workspaceRepository.executeCommand(workspaceId, effectiveCommand, effectiveCwd.orEmpty(), timeoutMillis)
             }
         } catch (e: Throwable) {
             shellAuditLogger?.finish(
@@ -460,6 +473,7 @@ private fun createShellTool(
                     put("stderr", result.stderr.stripAnsi())
                     put("timedOut", result.timedOut)
                     if (result.truncated) put("truncated", true)
+                    if (bashWrapped) put("bashWrapped", true)
                     if (useSession) put("cwd", shellSessionManager?.currentCwd(workspaceId).orEmpty())
                 }.toString()
             )

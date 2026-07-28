@@ -95,6 +95,9 @@ class RikkaHubApp : Application() {
         // Init QuickJS native library
         QuickJSLoader.init()
 
+        // Load bashism detection rules from assets (T-bash-on-demand)
+        me.rerere.rikkahub.data.ai.shell.BashismDetector.ensureLoaded(this)
+
         // delete temp files
         deleteTempFiles()
 
