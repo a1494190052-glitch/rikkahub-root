@@ -481,7 +481,7 @@ private fun CodeBlockPreview(
 ) {
     val state = rememberWebViewState(
         data = buildCodePreviewHtml(code = code, language = language),
-        baseUrl = "https://rikkahub.local",
+        baseUrl = null,
         mimeType = "text/html",
         settings = {
             builtInZoomControls = true
@@ -501,7 +501,14 @@ private fun buildCodePreviewHtml(code: String, language: String): String {
     return if (language == "svg") {
         """<!DOCTYPE html><html><body style="margin:0;display:flex;justify-content:center;align-items:center;min-height:100vh;">$code</body></html>"""
     } else {
-        code
+        val trimmed = code.trim()
+        val isCompleteDoc = trimmed.startsWith("<!DOCTYPE", ignoreCase = true) || trimmed.startsWith("<html", ignoreCase = true)
+        if (isCompleteDoc) {
+            code
+        } else {
+            // 把 HTML 片段包裹成完整文档，确保 WebView 正确渲染
+            """<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"></head><body style="margin:8px;background:#ffffff;color:#000000">$code</body></html>"""
+        }
     }
 }
 
