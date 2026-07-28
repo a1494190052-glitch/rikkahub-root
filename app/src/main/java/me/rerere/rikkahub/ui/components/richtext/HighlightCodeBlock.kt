@@ -22,6 +22,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.Icon
@@ -551,21 +552,30 @@ private fun CodeBlockPreview(
         }
     }
 
-    // 高度 = 内容高度（CSS px 直接当 dp）；未测到时用占位高度
-    val heightDp = if (contentHeightCssPx == 0) 220.dp else contentHeightCssPx.dp.coerceAtMost(4096.dp)
+    // WebView 高度 = 内容全高（CSS px 直接当 dp），把它当成一张"长图"
+    val webViewHeightDp = if (contentHeightCssPx == 0) 220.dp else contentHeightCssPx.dp.coerceAtMost(8000.dp)
+    val scrollState = rememberScrollState()
 
-    WebView(
-        state = state,
+    // 外面套一个固定高度的 Compose 滚动框：框内可上下滑动浏览 HTML，
+    // 滑到边界后由 Compose 原生嵌套滚动自动接力给外层聊天列表（不冲突）。
+    // WebView 自身不滚动（高度=内容+overflow:hidden），只作为静态长图被滚动框承载。
+    Box(
         modifier = modifier
             .clip(RoundedCornerShape(4.dp))
-            .height(heightDp),
-        onCreated = { webView ->
-            // 强制 1:1 初始缩放，防止内容被压缩
-            webView.setInitialScale(100)
-            // 切断嵌套滚动协议（WebView 不自滚，但保险起见仍关闭，与 HtmlContent.kt 一致）
-            webView.isNestedScrollingEnabled = false
-        },
-    )
+            .height(420.dp)
+            .verticalScroll(scrollState)
+    ) {
+        WebView(
+            state = state,
+            modifier = Modifier.fillMaxWidth().height(webViewHeightDp),
+            onCreated = { webView ->
+                // 强制 1:1 初始缩放，防止内容被压缩
+                webView.setInitialScale(100)
+                // 切断 WebView 嵌套滚动协议，自身完全不参与滚动
+                webView.isNestedScrollingEnabled = false
+            },
+        )
+    }
 }
 
 private fun buildCodePreviewHtml(code: String, language: String): String {
