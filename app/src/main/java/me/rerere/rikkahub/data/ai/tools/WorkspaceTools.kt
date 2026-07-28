@@ -96,8 +96,81 @@ suspend fun createWorkspaceTools(
             add(createBackgroundOutputTool(backgroundShellManager))
             add(createBackgroundKillTool(backgroundShellManager))
         }
+        if (shellSessionManager != null) {
+            add(createRunCodeTool(workspaceId, ::needsApproval, shellCwd, shellSessionManager))
+        }
     }
 }
+
+/**
+ * run_code 工具：在工作区沙箱执行代码（Python3/Node/Bash），返回 stdout/stderr/exitCode。
+ * 代码经 base64 传输避免 shell 转义问题；检测到 HTML 输出时提示以 ```html 代码块呈现，
+ * 触发 HighlightCodeBlock 的内联即时预览（Artifacts 式）。
+ */
+private fun createRunCodeTool(
+    workspaceId: String,
+    needsApproval: (String) -> Boolean,
+    shellCwd: String?,
+    shellSessionManager: ShellSessionManager,
+) = Tool(
+    name = "run_code",
+    description = """
+        Execute code in the workspace sandbox (Python3 / Node.js / Bash) and return stdout/stderr/exitCode.
+        Use this to run code and see results instantly.
+        IMPORTANT — instant visual preview: if the code produces HTML output (a webpage, chart, table, report, or SVG),
+        present the COMPLETE HTML in a ```html fenced code block in your response so the user sees it rendered as an instant preview.
+        Tip: to visualize data, have your code print HTML (e.g., Python building an HTML table or inline SVG chart).
+    """.trimIndent().replace("\n", " "),
+    parameters = {
+        InputSchema.Obj(
+            properties = buildJsonObject {
+                put("code", buildJsonObject {
+                    put("type", "string")
+                    put("description", "The code to execute")
+                })
+                put("language", buildJsonObject {
+                    put("type", "string")
+                    put("description", "python | javascript | shell")
+                    put("enum", buildJsonArray { add("python"); add("javascript"); add("shell") })
+                })
+            },
+            required = listOf("code", "language"),
+        )
+    },
+    needsApproval = { needsApproval("run_code") },
+    execute = { input ->
+        val code = input.jsonObject["code"]?.jsonPrimitive?.contentOrNull ?: error("code is required")
+        val language = (input.jsonObject["language"]?.jsonPrimitive?.contentOrNull ?: "python").lowercase()
+        val b64 = java.util.Base64.getEncoder().encodeToString(code.toByteArray(Charsets.UTF_8))
+        val (ext, runner) = when (language) {
+            "python", "python3", "py" -> "py" to "python3"
+            "javascript", "js", "node" -> "js" to "node"
+            "shell", "bash", "sh" -> "sh" to "bash"
+            else -> error("unsupported language: $language (use python | javascript | shell)")
+        }
+        val command = "echo '$b64' | base64 -d > /tmp/_runcode.$ext && $runner /tmp/_runcode.$ext"
+        val result = runInterruptible(Dispatchers.IO) {
+            shellSessionManager.exec(workspaceId, command, shellCwd, 120_000L)
+        }
+        val stdout = result.stdout.stripAnsi().trim()
+        val stderr = result.stderr.stripAnsi().trim()
+        val isHtml = stdout.startsWith("<!DOCTYPE", true) || stdout.startsWith("<html", true) ||
+            stdout.startsWith("<svg", true) || stdout.contains("<html", true)
+        val payload = buildJsonObject {
+            put("exitCode", result.exitCode)
+            put("stdout", stdout)
+            if (stderr.isNotEmpty()) put("stderr", stderr)
+            if (result.timedOut) put("timedOut", true)
+            if (isHtml) put("preview", "html")
+        }
+        val text = if (isHtml) {
+            payload.toString() + "\n\nThe code produced HTML output — present it in a ```html code block for instant preview:\n\n```html\n" + stdout + "\n```"
+        } else {
+            payload.toString()
+        }
+        listOf(UIMessagePart.Text(text))
+    },
+)
 
 private val IMAGE_EXTENSIONS = setOf("png", "jpg", "jpeg", "gif", "webp", "bmp", "svg")
 
