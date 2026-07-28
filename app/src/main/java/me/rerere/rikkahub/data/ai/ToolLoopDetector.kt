@@ -222,7 +222,7 @@ class ToolLoopDetector(
         val normalized = try {
             val obj = json.parseToJsonElement(argsJson).jsonObject
             val filtered = obj.filterKeys { it !in ARGS_HASH_IGNORED_KEYS }
-            stableJson(filtered)
+            stableJson(JsonObject(filtered))
         } catch (_: Exception) {
             argsJson
         }
