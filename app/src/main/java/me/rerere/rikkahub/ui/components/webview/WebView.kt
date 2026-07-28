@@ -94,7 +94,7 @@ fun WebView(
     ) {
         AndroidView(
             factory = { context ->
-                NestedScrollWebView(context).apply {
+                WebView(context).apply {
                     layoutParams = LayoutParams(
                         LayoutParams.MATCH_PARENT,
                         LayoutParams.MATCH_PARENT
