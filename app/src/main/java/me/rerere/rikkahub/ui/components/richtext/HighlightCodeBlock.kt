@@ -489,62 +489,28 @@ private fun CodeBlockPreview(
         settings = {
             builtInZoomControls = true
             displayZoomControls = false
-            // 关键：关闭宽视口和概览缩放，避免内容被缩小到看不见
+            // 关闭宽视口和概览缩放，内容按 1:1 渲染，不被缩小
             useWideViewPort = false
             loadWithOverviewMode = false
         }
     )
 
-    // 内容高度（CSS px，等同 dp），0 表示尚未测量
-    var contentHeightCssPx by remember(code, language) { mutableIntStateOf(0) }
-
-    // 页面加载完成后用 JS 测量内容高度。
-    // scrollHeight 返回的是 CSS px，基本等同 dp，直接按 dp 使用，不要再换算。
-    LaunchedEffect(state.isLoading) {
-        if (!state.isLoading) {
-            repeat(3) {
-                delay(160)
-                state.webView?.evaluateJavascript(
-                    """
-                    Math.ceil(Math.max(
-                        document.body?.scrollHeight || 0,
-                        document.documentElement?.scrollHeight || 0
-                    ))
-                    """.trimIndent()
-                ) { result ->
-                    val height = result
-                        ?.trim()
-                        ?.removeSurrounding("\"")
-                        ?.toFloatOrNull()
-                        ?.toInt()
-                        ?: 0
-                    if (height > 0) {
-                        contentHeightCssPx = height
-                    }
-                }
-            }
-        }
-    }
-
-    // 高度自适应内容，限制在合理区间
-    val fittedHeight = contentHeightCssPx.dp.coerceIn(140.dp, 560.dp)
-
+    // 固定预览高度（v4 已验证此方案渲染稳定可见）。
+    // 不再用 JS 动态测高——动态改高度会触发 WebView 重新布局并重算缩放，
+    // 导致内容被压缩到看不见。超出部分交给下面已修好的内部滚动处理。
     WebView(
         state = state,
         modifier = modifier
             .clip(RoundedCornerShape(4.dp))
-            .height(if (contentHeightCssPx == 0) 220.dp else fittedHeight),
+            .height(400.dp),
         onCreated = { webView ->
-            // 强制 1:1 初始缩放，防止渲染后被自动压缩
+            // 强制 1:1 初始缩放，防止内容被压缩
             webView.setInitialScale(100)
-            // 关键：切断 WebView 的嵌套滚动协议。
-            // WebView 默认 isNestedScrollingEnabled=true，会通过 dispatchNestedScroll
-            // 把滚动主动上交给外层 LazyColumn，绕过 requestDisallowInterceptTouchEvent，
-            // 导致内部永远滚不动。必须关闭，让 WebView 自管滚动域。
-            // （与项目内 HtmlContent.kt 已验证的做法一致）
+            // 切断 WebView 的嵌套滚动协议：默认开启时会通过 dispatchNestedScroll
+            // 把滚动主动上交给外层 LazyColumn（绕过 requestDisallowInterceptTouchEvent），
+            // 导致内部滚不动。关闭后 WebView 自管滚动域。（与 HtmlContent.kt 一致）
             webView.isNestedScrollingEnabled = false
-            // 方向感知手势：按滑动方向判断 WebView 是否还能继续滚，
-            // 滚到顶/底立即把手势交还外层聊天列表，避免滚动死区
+            // 方向感知手势：WebView 可滚时内部滚，滚到顶/底立即交还外层聊天列表
             var lastTouchY = 0f
             webView.setOnTouchListener { view, event ->
                 val wv = view as android.webkit.WebView
