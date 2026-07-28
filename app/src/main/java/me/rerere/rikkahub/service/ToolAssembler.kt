@@ -64,7 +64,7 @@ class ToolAssembler(
             subagentOrchestrator.buildSubagentTools(assistant, settings, conversation.workspaceCwd, depth = 0, assistant.subagentMaxDepth, includeBase = false, conversationId = conversationId)
         } else emptyList()
 
-        return buildList {
+        val tools = buildList {
             if (assistant.enableWebSearch) addAll(createSearchTools(settings))
             addAll(localTools.getTools(assistant.localTools))
             if (assistant.localTools.contains(LocalToolOption.Scheduler)) {
@@ -84,5 +84,7 @@ class ToolAssembler(
             // kimi-code 子代理委派工具
             addAll(subagentTools)
         }
+
+        return tools.distinctBy { it.name }
     }
 }
