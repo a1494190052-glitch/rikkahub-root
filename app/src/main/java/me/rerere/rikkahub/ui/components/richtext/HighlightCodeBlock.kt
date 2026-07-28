@@ -508,6 +508,11 @@ private fun CodeBlockPreview(
                 if (wv != null) {
                     val ch = (wv.contentHeight * wv.scale).toInt()
                     if (ch > 0) contentHeightCssPx = ch
+                    // 诊断写文件（避开 logcat 污染）
+                    try {
+                        java.io.File("/sdcard/Android/data/me.rerere.rikkahub.root2/files/preview_diag.txt")
+                            .appendText("t=${System.currentTimeMillis()} contentH=$ch scale=${wv.scale} viewH=${wv.height} scrollDown=${wv.canScrollVertically(1)} scrollUp=${wv.canScrollVertically(-1)} nested=${wv.isNestedScrollingEnabled}\n")
+                    } catch (e: Exception) { }
                 }
             }
         }
