@@ -33,6 +33,7 @@ class LocalTools(
     private val ptySessionManager: me.rerere.rikkahub.service.shell.PtySessionManager? = null,
     private val mcpManager: me.rerere.rikkahub.data.ai.mcp.McpManager? = null,
     private val pluginManager: me.rerere.rikkahub.plugin.manager.PluginManager? = null,
+    private val browserTabPool: me.rerere.rikkahub.browser.BrowserTabPool? = null,
     private val isSubAgent: Boolean = false,
 ) {
     val javascriptTool by lazy { buildJavascriptTool() }
@@ -71,6 +72,7 @@ class LocalTools(
     val notificationPostTool by lazy { createNotificationPostTool(context) }
     val shareTool by lazy { createShareTool(context) }
     val mediaScannerTool by lazy { createMediaScannerTool(context) }
+    val browserUseTool by lazy { browserTabPool?.let { createBrowserUseTool(it) } }
 
     fun forSubAgent(): LocalTools =
         LocalTools(context, eventBus, ttsManager, settingsStore, null, shellAuditLogger, null, null, null, isSubAgent = true)
