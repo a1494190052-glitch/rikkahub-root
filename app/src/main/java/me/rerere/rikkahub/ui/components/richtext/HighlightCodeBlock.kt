@@ -175,7 +175,9 @@ fun HighlightCodeBlock(
                     CodeBlockPreview(
                         code = code,
                         language = normalizedLanguage,
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(200.dp),
                     )
                 }
                 completeCodeBlock && normalizedLanguage == "mermaid" -> {
@@ -483,9 +485,6 @@ private fun CodeBlockPreview(
     language: String,
     modifier: Modifier = Modifier,
 ) {
-    // 内容高度（CSS px，1:1 缩放下等同 dp）。0 = 尚未测到，先用占位高度
-    var contentHeightCssPx by remember(code, language) { mutableIntStateOf(0) }
-
     val state = rememberWebViewState(
         data = buildCodePreviewHtml(code = code, language = language),
         baseUrl = "https://rikkahub.local",
@@ -493,70 +492,22 @@ private fun CodeBlockPreview(
         settings = {
             builtInZoomControls = true
             displayZoomControls = false
-            // 1:1 渲染，不缩放
-            useWideViewPort = false
-            loadWithOverviewMode = false
+            useWideViewPort = true
+            loadWithOverviewMode = true
         }
     )
 
-    // 用 Android 原生 webView.contentHeight 测内容真实高度（不受视口影响，无反馈循环）
-    LaunchedEffect(state.isLoading) {
-        if (!state.isLoading) {
-            repeat(5) {
-                delay(180)
-                val wv = state.webView
-                if (wv != null) {
-                    val ch = (wv.contentHeight * wv.scale).toInt()
-                    if (ch > 0) contentHeightCssPx = ch
-                    // 诊断写文件（避开 logcat 污染）
-                    try {
-                        java.io.File("/sdcard/Android/data/me.rerere.rikkahub.root2/files/preview_diag.txt")
-                            .appendText("t=${System.currentTimeMillis()} contentH=$ch scale=${wv.scale} viewH=${wv.height} scrollDown=${wv.canScrollVertically(1)} scrollUp=${wv.canScrollVertically(-1)} nested=${wv.isNestedScrollingEnabled}\n")
-                    } catch (e: Exception) { }
-                }
-            }
-        }
-    }
-
-    // 预览高度 = min(内容高, 420dp)：内容矮则贴合内容，内容高则为 420dp 窗口供内部滚动
-    val previewHeight = if (contentHeightCssPx == 0) 220.dp else contentHeightCssPx.dp.coerceIn(120.dp, 420.dp)
-
-    // WebView 底层已换成 NestedScrollWebView：开启嵌套滚动后，WebView 在窗口内自身滚动，
-    // 滚到顶/底会自动把剩余滚动量通过嵌套滚动协议交给外层 LazyColumn，无缝接力，无冲突。
     WebView(
         state = state,
-        modifier = modifier
-            .clip(RoundedCornerShape(4.dp))
-            .height(previewHeight),
-        onCreated = { webView ->
-            // 强制 1:1 初始缩放，防止内容被压缩
-            webView.setInitialScale(100)
-            // 开启嵌套滚动：内部滚动 + 边界接力外层聊天列表
-            webView.isNestedScrollingEnabled = true
-        },
+        modifier = modifier.clip(RoundedCornerShape(4.dp)),
     )
 }
 
 private fun buildCodePreviewHtml(code: String, language: String): String {
-    // 临时诊断：仅打印窗口/内容高度，不修改任何布局
-    val diag = """<script>setTimeout(function(){try{console.error('[PREVIEW] innerH='+window.innerHeight+' bodySH='+(document.body?document.body.scrollHeight:0)+' docSH='+document.documentElement.scrollHeight+' dpr='+window.devicePixelRatio);}catch(e){}},600);</script>"""
     return if (language == "svg") {
-        """<!DOCTYPE html><html><head><meta name="viewport" content="width=device-width, initial-scale=1.0"></head><body style="margin:0;display:flex;justify-content:center;align-items:center;">$code$diag</body></html>"""
+        """<!DOCTYPE html><html><body style="margin:0;display:flex;justify-content:center;align-items:center;min-height:100vh;">$code</body></html>"""
     } else {
-        val trimmed = code.trim()
-        val hasViewport = trimmed.contains("name=\"viewport\"", ignoreCase = true)
-        val isCompleteDoc = trimmed.startsWith("<!DOCTYPE", ignoreCase = true) ||
-            trimmed.startsWith("<html", ignoreCase = true)
-        when {
-            isCompleteDoc && hasViewport -> {
-                if (code.contains("</body>", ignoreCase = true)) code.replaceFirst(Regex("</body>", RegexOption.IGNORE_CASE), "$diag</body>") else code + diag
-            }
-            isCompleteDoc -> code.replaceFirst(
-                Regex("<head[^>]*>", RegexOption.IGNORE_CASE),
-                "$0<meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">"
-            ).let { if (it.contains("</body>", ignoreCase = true)) it.replaceFirst(Regex("</body>", RegexOption.IGNORE_CASE), "$diag</body>") else it + diag }
-            else -> """<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"></head><body style="margin:8px">$code$diag</body></html>"""
-        }
+        code
     }
 }
 
