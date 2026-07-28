@@ -224,6 +224,21 @@ class ChatService(
         )
     }
 
+    /** 工具装配器：为一次生成请求构建工具列表（搜索/本地/调度/会话引用/工作区/技能/MCP/子代理） */
+    private val toolAssembler: ToolAssembler by lazy {
+        ToolAssembler(
+            context = context,
+            localTools = localTools,
+            scheduledTaskRepository = scheduledTaskRepository,
+            conversationRepo = conversationRepo,
+            skillManager = skillManager,
+            mcpManager = mcpManager,
+            subagentOrchestrator = subagentOrchestrator,
+            workspaceToolsFactory = { wsId, cwd -> createWorkspaceToolsIfReady(wsId, cwd) },
+            reportError = { e, cid, title, solution -> addError(e, cid, title, solution) },
+        )
+    }
+
     private val _errors = MutableStateFlow<List<ChatError>>(emptyList())
     val errors: StateFlow<List<ChatError>> = _errors.asStateFlow()
 
@@ -441,10 +456,8 @@ class ChatService(
             val conversation = getConversationFlow(conversationId).value
             val session = getOrCreateSession(conversationId)
 
-            // ---- 子代理工具：kimi-code spawn_subagent ----
-            val subagentTools = if (assistant.enableSubagents) {
-                subagentOrchestrator.buildSubagentTools(assistant, settings, conversation.workspaceCwd, depth = 0, assistant.subagentMaxDepth, includeBase = false, conversationId = conversationId)
-            } else emptyList()
+            // ---- 工具装配（搜索/本地/调度/会话引用/工作区/技能/MCP/子代理）----
+            val tools = toolAssembler.assembleTools(assistant, settings, conversation, conversationId) ?: return
 
             generationHandler.generateText(
                 settings = settings, model = model, processingStatus = session.processingStatus,
@@ -457,32 +470,7 @@ class ChatService(
                 memories = if (assistant.useGlobalMemory) memoryRepository.getGlobalMemories() else memoryRepository.getMemoriesOfAssistant(assistant.id.toString()),
                 inputTransformers = buildList { addAll(inputTransformers); add(templateTransformer); add(workspaceReminderTransformer) },
                 outputTransformers = outputTransformers,
-                tools = buildList {
-                    if (assistant.enableWebSearch) addAll(createSearchTools(settings))
-                    addAll(localTools.getTools(assistant.localTools))
-                    if (assistant.localTools.contains(LocalToolOption.Scheduler)) {
-                        add(me.rerere.rikkahub.data.ai.tools.local.buildCreateScheduleTool(scheduledTaskRepository, assistant))
-                        add(me.rerere.rikkahub.data.ai.tools.local.buildListSchedulesTool(scheduledTaskRepository, assistant))
-                        add(me.rerere.rikkahub.data.ai.tools.local.buildDeleteScheduleTool(scheduledTaskRepository, assistant))
-                        add(me.rerere.rikkahub.data.ai.tools.local.buildToggleScheduleTool(scheduledTaskRepository, assistant))
-                    }
-                    if (assistant.enableRecentChatsReference) addAll(createConversationTools(conversationRepo, assistant.id))
-                    addAll(createWorkspaceToolsIfReady(assistant.workspaceId?.toString(), conversation.workspaceCwd))
-                    if (assistant.enabledSkills.isNotEmpty()) {
-                        addAll(createSkillTools(enabledSkills = assistant.enabledSkills, allSkills = skillManager.listSkills(), skillManager = skillManager))
-                    }
-                    mcpManager.getAllAvailableTools().also { allTools ->
-                        val invalidNames = allTools.map { it.second }.distinct().filter { name -> name.isEmpty() || !name.all { it in 'a'..'z' || it in 'A'..'Z' || it in '0'..'9' } }
-                        if (invalidNames.isNotEmpty()) {
-                            addError(error = IllegalStateException(context.getString(R.string.error_mcp_invalid_server_name, invalidNames.joinToString(", "))), conversationId = conversationId)
-                            return
-                        }
-                    }.forEach { (serverId, serverName, tool) ->
-                        add(Tool(name = "mcp__${serverName}__${tool.name}", description = tool.description ?: "", parameters = { tool.inputSchema }, needsApproval = { tool.needsApproval }, execute = { mcpManager.callTool(serverId, tool.name, it.jsonObject) }))
-                    }
-                    // kimi-code 子代理委派工具
-                    addAll(subagentTools)
-                },
+                tools = tools,
             ).onCompletion {
                 val updatedConversation = getConversationFlow(conversationId).value.copy(
                     messageNodes = getConversationFlow(conversationId).value.messageNodes.map { node -> node.copy(messages = node.messages.map { it.finishReasoning() }) },
