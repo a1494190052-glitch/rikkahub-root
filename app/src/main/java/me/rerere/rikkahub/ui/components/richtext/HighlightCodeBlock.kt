@@ -486,29 +486,40 @@ private fun CodeBlockPreview(
         settings = {
             builtInZoomControls = true
             displayZoomControls = false
-            useWideViewPort = true
-            loadWithOverviewMode = true
+            // 关键：关闭宽视口和概览缩放，避免内容被缩小到看不见
+            useWideViewPort = false
+            loadWithOverviewMode = false
         }
     )
 
     WebView(
         state = state,
         modifier = modifier.clip(RoundedCornerShape(4.dp)),
+        onCreated = { webView ->
+            // 强制 1:1 初始缩放，防止渲染后被自动压缩
+            webView.setInitialScale(100)
+        },
     )
 }
 
 private fun buildCodePreviewHtml(code: String, language: String): String {
     return if (language == "svg") {
-        """<!DOCTYPE html><html><body style="margin:0;display:flex;justify-content:center;align-items:center;min-height:100vh;">$code</body></html>"""
+        """<!DOCTYPE html><html><head><meta name="viewport" content="width=device-width, initial-scale=1.0"></head><body style="margin:0;display:flex;justify-content:center;align-items:center;min-height:100vh;">$code</body></html>"""
     } else {
         val trimmed = code.trim()
+        val hasViewport = trimmed.contains("name=\"viewport\"", ignoreCase = true)
         val isCompleteDoc = trimmed.startsWith("<!DOCTYPE", ignoreCase = true) ||
             trimmed.startsWith("<html", ignoreCase = true)
-        if (isCompleteDoc) {
-            code
-        } else {
-            // 把 HTML 片段包裹成完整文档，避免 WebView 渲染空白
-            """<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"></head><body style="margin:8px">$code</body></html>"""
+        when {
+            // 完整文档且已含 viewport：原样返回
+            isCompleteDoc && hasViewport -> code
+            // 完整文档但缺 viewport：注入 viewport，避免被当成宽页面缩放
+            isCompleteDoc -> code.replaceFirst(
+                Regex("<head[^>]*>", RegexOption.IGNORE_CASE),
+                "$0<meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">"
+            )
+            // HTML 片段：包裹成带 viewport 的完整文档
+            else -> """<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"></head><body style="margin:8px">$code</body></html>"""
         }
     }
 }
