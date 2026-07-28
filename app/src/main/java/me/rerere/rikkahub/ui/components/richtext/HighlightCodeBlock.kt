@@ -501,36 +501,48 @@ private fun CodeBlockPreview(
     // 内容实际高度（px），0 表示尚未测量
     var contentHeightPx by remember(code, language) { mutableIntStateOf(0) }
 
-    // 页面加载完成后测量内容高度，让预览框自适应内容
+    // 页面加载完成后用 JS 精确测量内容高度，让预览框自适应内容
     LaunchedEffect(state.isLoading) {
-        if (!state.isLoading && contentHeightPx == 0) {
-            delay(180) // 等布局稳定
-            state.webView?.let { wv ->
-                val h = (wv.contentHeight * wv.scale).toInt()
-                if (h > 0) contentHeightPx = h
+        if (!state.isLoading) {
+            // 多次测量，等布局稳定后取到准确高度
+            repeat(3) {
+                delay(160)
+                state.webView?.evaluateJavascript(
+                    "Math.max(document.body.scrollHeight,document.documentElement.scrollHeight)"
+                ) { result ->
+                    val cssPx = result?.trim()?.removeSurrounding("\"")?.toFloatOrNull()?.toInt() ?: 0
+                    if (cssPx > 0) {
+                        val scale = state.webView?.scale ?: 1f
+                        contentHeightPx = (cssPx * scale).toInt()
+                    }
+                }
             }
         }
     }
 
     // 高度自适应内容，限制在合理区间
-    val fittedHeight = with(density) { contentHeightPx.toDp() }.coerceIn(140.dp, 520.dp)
+    val fittedHeight = with(density) { contentHeightPx.toDp() }.coerceIn(140.dp, 560.dp)
 
     WebView(
         state = state,
         modifier = modifier
             .clip(RoundedCornerShape(4.dp))
-            .height(if (contentHeightPx == 0) 200.dp else fittedHeight),
+            .height(if (contentHeightPx == 0) 220.dp else fittedHeight),
         onCreated = { webView ->
             // 强制 1:1 初始缩放，防止渲染后被自动压缩
             webView.setInitialScale(100)
-            // 内容超出可视区时，允许 WebView 内部滚动（不被外层聊天列表抢走手势）
+            // 智能手势：仅当 WebView 自身可滚动时才拦截手势（内部滚动），
+            // 否则交还给外层聊天列表，避免"内外都滑不动"的死区
             webView.setOnTouchListener { v, event ->
                 val wv = v as android.webkit.WebView
-                val canScroll = wv.contentHeight * wv.scale > wv.height
-                if (canScroll &&
-                    (event.action == MotionEvent.ACTION_DOWN || event.action == MotionEvent.ACTION_MOVE)
-                ) {
-                    v.parent?.requestDisallowInterceptTouchEvent(true)
+                when (event.action) {
+                    MotionEvent.ACTION_DOWN -> {
+                        val canScroll = wv.canScrollVertically(-1) || wv.canScrollVertically(1)
+                        v.parent?.requestDisallowInterceptTouchEvent(canScroll)
+                    }
+                    MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                        v.parent?.requestDisallowInterceptTouchEvent(false)
+                    }
                 }
                 false
             }
