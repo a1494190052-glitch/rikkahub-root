@@ -82,6 +82,7 @@ private fun WebView.resetState(
 fun WebView(
     state: WebViewState,
     modifier: Modifier = Modifier,
+    useNestedScroll: Boolean = false,
     onCreated: (WebView) -> Unit = {},
     onUpdated: (WebView) -> Unit = {},
 ) {
@@ -94,7 +95,12 @@ fun WebView(
     ) {
         AndroidView(
             factory = { context ->
-                WebView(context).apply {
+                val webView = if (useNestedScroll) {
+                    NestedScrollWebView(context)
+                } else {
+                    WebView(context)
+                }
+                webView.apply {
                     layoutParams = LayoutParams(
                         LayoutParams.MATCH_PARENT,
                         LayoutParams.MATCH_PARENT

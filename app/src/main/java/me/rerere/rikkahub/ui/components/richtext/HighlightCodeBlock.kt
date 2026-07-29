@@ -492,14 +492,15 @@ private fun CodeBlockPreview(
         settings = {
             builtInZoomControls = true
             displayZoomControls = false
-            useWideViewPort = true
-            loadWithOverviewMode = true
+            useWideViewPort = false
+            loadWithOverviewMode = false
         }
     )
 
     WebView(
         state = state,
         modifier = modifier.clip(RoundedCornerShape(4.dp)),
+        useNestedScroll = true,
     )
 }
 
