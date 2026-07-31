@@ -92,9 +92,9 @@ class SubagentOrchestrator(
                         subagentHost.spawn(
                             profile = profile, task = task, settings = settings,
                             parentAssistant = assistant, parentModel = parentModel,
-                            buildChildTools = { child, d -> buildSubagentTools(child, settings, workspaceCwd, d, maxDepth, includeBase = true, mcpServerIds = profile.mcpServerIds, allowHostShellWrite = profile.allowHostShellWrite) },
+                            buildChildTools = { child, d -> buildSubagentTools(child, settings, workspaceCwd, d, maxDepth, includeBase = true, conversationId = conversationId, mcpServerIds = profile.mcpServerIds, allowHostShellWrite = profile.allowHostShellWrite) },
                             depth = depth + 1, maxDepth = maxDepth,
-                            onProgress = if (conversationId != null) { subMessages -> updateSubagentProgress(conversationId, null, profileName, subMessages) } else null,
+                            onProgress = if (conversationId != null) { subMessages -> updateSubagentProgress(conversationId, null, profileName, depth + 1, subMessages) } else null,
                             onSessionComplete = { sessionId, session -> storeSubagentSession(sessionId, session) },
                         )
                     }
@@ -105,8 +105,8 @@ class SubagentOrchestrator(
                     else {
                         val (r, newMessages) = subagentHost.resume(
                             session = session, followUp = followUp, settings = settings,
-                            buildChildTools = { child, d -> buildSubagentTools(child, settings, workspaceCwd, d, maxDepth, includeBase = true, mcpServerIds = session.profile.mcpServerIds, allowHostShellWrite = session.profile.allowHostShellWrite) },
-                            onProgress = if (conversationId != null) { subMessages -> updateSubagentProgress(conversationId, null, session.profile.name, subMessages) } else null,
+                            buildChildTools = { child, d -> buildSubagentTools(child, settings, workspaceCwd, d, maxDepth, includeBase = true, conversationId = conversationId, mcpServerIds = session.profile.mcpServerIds, allowHostShellWrite = session.profile.allowHostShellWrite) },
+                            onProgress = if (conversationId != null) { subMessages -> updateSubagentProgress(conversationId, null, session.profile.name, depth + 1, subMessages) } else null,
                         )
                         if (r.succeeded) storeSubagentSession(sessionId, session.copy(messages = newMessages))
                         r
@@ -168,7 +168,7 @@ class SubagentOrchestrator(
         }
     }
 
-    fun updateSubagentProgress(conversationId: Uuid, toolCallId: String?, profileName: String, subMessages: List<UIMessage>) {
+    fun updateSubagentProgress(conversationId: Uuid, toolCallId: String?, profileName: String, depth: Int, subMessages: List<UIMessage>) {
         runCatching {
             val transcript = SubagentHost.buildTranscript(subMessages, truncateToolOutput = 2000)
             if (transcript.isEmpty()) return@runCatching
@@ -179,24 +179,30 @@ class SubagentOrchestrator(
                 put("subagent_steps", JsonPrimitive(transcript.size))
                 put("subagent_succeeded", JsonPrimitive(false))
                 put("subagent_streaming", JsonPrimitive(true))
+                put("subagent_depth", JsonPrimitive(depth))
             }
-            val partialOutput = UIMessagePart.Text(text = "{\"profile_name\":\"$profileName\",\"succeeded\":false,\"streaming\":true}", metadata = transcriptMetadata)
+            val partialOutput = UIMessagePart.Text(text = "{\"profile_name\":\"$profileName\",\"succeeded\":false,\"streaming\":true,\"depth\":$depth}", metadata = transcriptMetadata)
             updateConversationState(conversationId) { conversation ->
                 val messages = conversation.currentMessages
                 val lastAssistantIndex = messages.indexOfLast { it.role == MessageRole.ASSISTANT }
                 if (lastAssistantIndex < 0) return@updateConversationState conversation
                 val updatedMessages = messages.mapIndexed { index, message ->
                     if (index != lastAssistantIndex) return@mapIndexed message
-                    // 并行 spawn 进度路由: 优先精确 toolCallId; 否则按 streaming metadata 里的 profile 匹配;
+                    // 并行 spawn 进度路由: 优先精确 toolCallId; 否则按 streaming metadata 里的 (profile, depth) 匹配;
                     // 还未写入 metadata 的 spawn 部件只认领第一个, 避免多个并行子代理互相覆盖进度
                     var claimed = false
                     val matchesTool: (UIMessagePart.Tool) -> Boolean = matches@{ part ->
                         if (claimed || part.toolName != "spawn_subagent") return@matches false
                         if (toolCallId != null) return@matches part.toolCallId == toolCallId
-                        val streamingProfile = part.output.filterIsInstance<UIMessagePart.Text>().firstOrNull()
-                            ?.metadata?.get("subagent_profile")?.jsonPrimitive?.contentOrNull
+                        val streamingProfile = streamingProfileOf(part)
+                        val partDepth = part.output.filterIsInstance<UIMessagePart.Text>().firstOrNull()
+                            ?.metadata?.get("subagent_depth")?.jsonPrimitiveOrNull?.intOrNull
                         val hit = when {
-                            isStreamingSubagent(part) -> streamingProfile == profileName
+                            isStreamingSubagent(part) -> {
+                                // 嵌套层级精确匹配优先: 同 profile 不同 depth 不互相覆盖
+                                if (partDepth != null && partDepth != depth) false
+                                else streamingProfile == profileName
+                            }
                             !part.isExecuted -> streamingProfile == null || streamingProfile == profileName
                             else -> false
                         }
@@ -205,16 +211,69 @@ class SubagentOrchestrator(
                     }
                     if (!message.parts.any { it is UIMessagePart.Tool && matchesTool(it) }) return@mapIndexed message
                     claimed = false
-                    message.copy(parts = message.parts.map { part -> if (part is UIMessagePart.Tool && matchesTool(part)) part.copy(output = listOf(partialOutput)) else part })
+                    message.copy(parts = message.parts.map { part ->
+                        if (part is UIMessagePart.Tool && matchesTool(part)) {
+                            mergeNestedProgress(part, profileName, depth, transcript, listSerializer, partialOutput)
+                        } else part
+                    })
                 }
                 conversation.updateCurrentMessages(updatedMessages)
             }
         }.onFailure { Log.w(TAG, "updateSubagentProgress failed: ${it.message}") }
     }
 
+    /**
+     * 嵌套子代理进度合并：
+     * - 顶层 (depth==1)：整体替换为自身 transcript（原逻辑）
+     * - 嵌套 (depth>1) 且目标 part 属于外层其他 profile：不覆盖外层 transcript，
+     *   在末尾追加/更新一行状态标记 "🧩 子代理 xxx 运行中…"，外层时间线可见嵌套活动
+     */
+    private fun mergeNestedProgress(
+        part: UIMessagePart.Tool,
+        profileName: String,
+        depth: Int,
+        innerTranscript: List<SubagentTranscriptStep>,
+        listSerializer: kotlinx.serialization.builtins.ListSerializer<SubagentTranscriptStep>,
+        partialOutput: UIMessagePart.Text,
+    ): UIMessagePart.Tool {
+        val existingMeta = part.output.filterIsInstance<UIMessagePart.Text>().firstOrNull()?.metadata
+        val existingProfile = existingMeta?.get("subagent_profile")?.jsonPrimitiveOrNull?.contentOrNull
+        val partDepth = existingMeta?.get("subagent_depth")?.jsonPrimitiveOrNull?.intOrNull
+        // 嵌套到外层：外层已有 transcript 且 profile/深度不同 → 追加状态标记而非覆盖
+        if (depth > 1 && existingProfile != null && existingProfile != profileName) {
+            val existingTranscript = existingMeta?.get("subagent_transcript")?.let { el ->
+                runCatching {
+                    json.decodeFromJsonElement(listSerializer, el)
+                }.getOrNull()
+            }.orEmpty()
+            val marker = "🧩 子代理 $profileName (深度$depth) 运行中…"
+            val mergedTranscript = if (existingTranscript.lastOrNull() is SubagentTranscriptStep.Text &&
+                (existingTranscript.last() as SubagentTranscriptStep.Text).text.startsWith("🧩 子代理 $profileName")
+            ) {
+                existingTranscript.dropLast(1) + SubagentTranscriptStep.Text(marker)
+            } else {
+                existingTranscript + SubagentTranscriptStep.Text(marker)
+            }
+            return part.copy(output = listOf(partialOutput.copy(metadata = buildJsonObject {
+                put("subagent_transcript", json.encodeToJsonElement(listSerializer, mergedTranscript))
+                put("subagent_profile", JsonPrimitive(existingProfile))
+                put("subagent_steps", JsonPrimitive(mergedTranscript.size))
+                put("subagent_succeeded", JsonPrimitive(false))
+                put("subagent_streaming", JsonPrimitive(true))
+                put("subagent_depth", JsonPrimitive(partDepth ?: 1))
+            })))
+        }
+        // 顶层或自己的进度：整体替换
+        return part.copy(output = listOf(partialOutput))
+    }
+
+    private fun streamingProfileOf(part: UIMessagePart.Tool): String? =
+        part.output.filterIsInstance<UIMessagePart.Text>().firstOrNull()
+            ?.metadata?.get("subagent_profile")?.jsonPrimitiveOrNull?.contentOrNull
+
     private fun isStreamingSubagent(part: UIMessagePart.Tool): Boolean {
         val textPart = part.output.filterIsInstance<UIMessagePart.Text>().firstOrNull()
-        return textPart?.metadata?.get("subagent_streaming")?.jsonPrimitive?.contentOrNull == "true"
+        return textPart?.metadata?.get("subagent_streaming")?.jsonPrimitiveOrNull?.contentOrNull == "true"
     }
 
     private companion object {
