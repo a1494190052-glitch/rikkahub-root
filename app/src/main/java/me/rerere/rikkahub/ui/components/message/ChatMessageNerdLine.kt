@@ -37,7 +37,7 @@ fun ChatMessageNerdLine(
     modifier: Modifier = Modifier,
     color: Color = MaterialTheme.colorScheme.secondary.copy(alpha = 0.5f),
 ) {
-    val settings = LocalSettings.current.displaySetting
+    val settings = LocalSettings.current.settings.displaySetting
 
     ProvideTextStyle(MaterialTheme.typography.labelSmall.copy(color = color)) {
         CompositionLocalProvider(LocalContentColor provides color) {

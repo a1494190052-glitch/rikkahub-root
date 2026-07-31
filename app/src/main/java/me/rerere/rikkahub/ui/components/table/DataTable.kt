@@ -30,6 +30,7 @@ import androidx.compose.ui.unit.dp
 import me.rerere.rikkahub.data.datastore.Settings
 import me.rerere.rikkahub.ui.components.richtext.MarkdownBlock
 import me.rerere.rikkahub.ui.context.LocalSettings
+import me.rerere.rikkahub.ui.context.SettingsRef
 import kotlin.math.max
 
 /**
@@ -243,7 +244,7 @@ private fun CellBox(
 @Preview(showBackground = true)
 @Composable
 private fun DataTablePreview() {
-    CompositionLocalProvider(LocalSettings provides Settings()) {
+    CompositionLocalProvider(LocalSettings provides SettingsRef(Settings())) {
         Surface {
             val headers = listOf<@Composable () -> Unit>(
                 { Text("Semester", style = MaterialTheme.typography.labelLarge) },

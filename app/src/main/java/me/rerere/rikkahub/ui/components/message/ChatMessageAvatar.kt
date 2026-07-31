@@ -29,7 +29,7 @@ fun ChatMessageUserAvatar(
     nickname: String,
     modifier: Modifier = Modifier,
 ) {
-    val settings = LocalSettings.current
+    val settings = LocalSettings.current.settings
     if (message.role == MessageRole.USER && !message.parts.isEmptyUIMessage() && settings.displaySetting.showUserAvatar) {
         Row(
             modifier = modifier,
@@ -59,7 +59,7 @@ fun ChatMessageAssistantAvatar(
     assistant: Assistant?,
     modifier: Modifier = Modifier,
 ) {
-    val settings = LocalSettings.current
+    val settings = LocalSettings.current.settings
     val showIcon = settings.displaySetting.showModelIcon
     val useAssistantAvatar = assistant?.useAssistantAvatar == true
     if (message.role == MessageRole.ASSISTANT && (model != null || useAssistantAvatar)) {

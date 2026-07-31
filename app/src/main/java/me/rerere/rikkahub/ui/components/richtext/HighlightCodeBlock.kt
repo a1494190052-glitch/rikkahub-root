@@ -111,7 +111,7 @@ fun HighlightCodeBlock(
     val scope = rememberCoroutineScope()
     val navController = LocalNavController.current
     val context = LocalContext.current
-    val settings = LocalSettings.current
+    val settings = LocalSettings.current.settings
     val normalizedLanguage = remember(language) { language.lowercase() }
     val canInlinePreview = completeCodeBlock && normalizedLanguage in PREVIEWABLE_LANGUAGES
     var previewMode by remember(canInlinePreview, code, normalizedLanguage) {

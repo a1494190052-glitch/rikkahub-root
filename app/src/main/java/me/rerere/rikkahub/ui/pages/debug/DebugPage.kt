@@ -137,7 +137,7 @@ fun DebugPage(vm: DebugVM = koinViewModel()) {
 
 @Composable
 private fun MainPage(vm: DebugVM) {
-    val settings = LocalSettings.current
+    val settings = LocalSettings.current.settings
     val conversationCount by vm.conversationCount.collectAsStateWithLifecycle()
     Column(
         modifier = Modifier

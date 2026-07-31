@@ -341,7 +341,7 @@ private fun HtmlParagraphContent(
         return
     }
 
-    val enableLatexRendering = LocalSettings.current.displaySetting.enableLatexRendering
+    val enableLatexRendering = LocalSettings.current.settings.displaySetting.enableLatexRendering
     val hasInlineMath = element.select("span.math").any { it.attr("inline") == "true" }
     val colorScheme = MaterialTheme.colorScheme
     val textStyle = LocalTextStyle.current
@@ -391,7 +391,7 @@ private fun HtmlHeading(element: Element, onClickCitation: (String) -> Unit) {
     val level = element.tagName().removePrefix("h").toIntOrNull() ?: 1
     val headingStyle = HeaderStyle.fromLevel(
         level = level,
-        fontSizeRatio = LocalSettings.current.displaySetting.fontSizeRatio,
+        fontSizeRatio = LocalSettings.current.settings.displaySetting.fontSizeRatio,
     )
     val verticalPadding = HeaderStyle.verticalPadding(level)
     ProvideTextStyle(LocalTextStyle.current.merge(headingStyle)) {
@@ -566,7 +566,7 @@ private fun HtmlBlockquote(element: Element, onClickCitation: (String) -> Unit) 
 
 @Composable
 private fun HtmlMathBlock(formula: String) {
-    val enableLatexRendering = LocalSettings.current.displaySetting.enableLatexRendering
+    val enableLatexRendering = LocalSettings.current.settings.displaySetting.enableLatexRendering
     if (enableLatexRendering) {
         MathBlock(
             latex = formula,
@@ -696,7 +696,7 @@ private fun HtmlProgress(element: Element) {
  */
 @Composable
 private fun HtmlInlineGroup(nodes: List<Node>, onClickCitation: (String) -> Unit) {
-    val enableLatexRendering = LocalSettings.current.displaySetting.enableLatexRendering
+    val enableLatexRendering = LocalSettings.current.settings.displaySetting.enableLatexRendering
     val colorScheme = MaterialTheme.colorScheme
     val textStyle = LocalTextStyle.current
     val density = LocalDensity.current
@@ -777,7 +777,7 @@ private fun HtmlInlineAsComposable(node: Node, onClickCitation: (String) -> Unit
                     val colorScheme = MaterialTheme.colorScheme
                     val textStyle = LocalTextStyle.current
                     val density = LocalDensity.current
-                    val enableLatexRendering = LocalSettings.current.displaySetting.enableLatexRendering
+                    val enableLatexRendering = LocalSettings.current.settings.displaySetting.enableLatexRendering
                     val (annotated, inlineContents) = remember(
                         node.outerHtml(),
                         enableLatexRendering,

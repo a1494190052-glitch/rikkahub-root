@@ -33,6 +33,7 @@ import me.rerere.rikkahub.data.model.Assistant
 import me.rerere.rikkahub.di.viewModelModule
 import me.rerere.rikkahub.data.files.FilesManager
 import me.rerere.rikkahub.data.datastore.SettingsStore
+import me.rerere.rikkahub.service.McpServerService
 import me.rerere.rikkahub.service.WebServerService
 import me.rerere.rikkahub.utils.CrashHandler
 import me.rerere.rikkahub.data.ai.CrashFrequencyDetector
@@ -69,6 +70,7 @@ private const val ROOT_PRESET_ASSISTANT_PROMPT = """你是「搞机助手」，�
 const val CHAT_COMPLETED_NOTIFICATION_CHANNEL_ID = "chat_completed"
 const val CHAT_LIVE_UPDATE_NOTIFICATION_CHANNEL_ID = "chat_live_update"
 const val WEB_SERVER_NOTIFICATION_CHANNEL_ID = "web_server"
+const val MCP_SERVER_NOTIFICATION_CHANNEL_ID = "mcp_server"
 
 class RikkaHubApp : Application() {
     override fun onCreate() {
@@ -127,6 +129,8 @@ class RikkaHubApp : Application() {
 
         // Start WebServer if enabled in settings
         startWebServerIfEnabled()
+        // Start MCP Server if enabled in settings
+        startMcpServerIfEnabled()
         startFloatingTaskServiceIfEnabled()
         seedRootPresetAssistant()
 
@@ -315,6 +319,44 @@ class RikkaHubApp : Application() {
         }
     }
 
+    private fun startMcpServerIfEnabled() {
+        get<AppScope>().launch {
+            runCatching {
+                delay(500)
+                val settings = get<SettingsStore>().settingsFlowRaw.first()
+                if (settings.mcpServerEnabled) {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+                        ContextCompat.checkSelfPermission(
+                            this@RikkaHubApp,
+                            android.Manifest.permission.POST_NOTIFICATIONS
+                        ) != PackageManager.PERMISSION_GRANTED
+                    ) {
+                        Log.w(TAG, "startMcpServerIfEnabled: notification permission not granted, skipping")
+                        return@launch
+                    }
+                    if (Build.VERSION.SDK_INT >= 37 &&
+                        !settings.mcpServerLocalhostOnly &&
+                        ContextCompat.checkSelfPermission(
+                            this@RikkaHubApp,
+                            android.Manifest.permission.ACCESS_LOCAL_NETWORK
+                        ) != PackageManager.PERMISSION_GRANTED
+                    ) {
+                        Log.w(TAG, "startMcpServerIfEnabled: local network permission not granted, skipping")
+                        return@launch
+                    }
+                    val intent = Intent(this@RikkaHubApp, McpServerService::class.java).apply {
+                        action = McpServerService.ACTION_START
+                        putExtra(McpServerService.EXTRA_PORT, settings.mcpServerPort)
+                        putExtra(McpServerService.EXTRA_LOCALHOST_ONLY, settings.mcpServerLocalhostOnly)
+                    }
+                    startForegroundService(intent)
+                }
+            }.onFailure {
+                Log.e(TAG, "startMcpServerIfEnabled failed", it)
+            }
+        }
+    }
+
     private fun createNotificationChannel() {
         val notificationManager = NotificationManagerCompat.from(this)
         val chatCompletedChannel = NotificationChannelCompat
@@ -345,6 +387,14 @@ class RikkaHubApp : Application() {
             .build()
         notificationManager.createNotificationChannel(webServerChannel)
 
+        val mcpServerChannel = NotificationChannelCompat
+            .Builder(MCP_SERVER_NOTIFICATION_CHANNEL_ID, NotificationManagerCompat.IMPORTANCE_LOW)
+            .setName(getString(R.string.notification_channel_mcp_server))
+            .setVibrationEnabled(false)
+            .setShowBadge(false)
+            .build()
+        notificationManager.createNotificationChannel(mcpServerChannel)
+
         // 定时任务主动消息渠道 (高重要性: 主动消息需要提醒)
         val scheduledTaskChannel = NotificationChannelCompat
             .Builder(
@@ -366,7 +416,7 @@ class RikkaHubApp : Application() {
 
 class AppScope : CoroutineScope by CoroutineScope(
     SupervisorJob()
-        + Dispatchers.Main
+        + Dispatchers.Default
         + CoroutineName("AppScope")
         + CoroutineExceptionHandler { _, e ->
         Log.e(TAG, "AppScope exception", e)

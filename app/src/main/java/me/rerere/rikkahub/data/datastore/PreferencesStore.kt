@@ -138,6 +138,13 @@ class SettingsStore(
         val WEB_SERVER_ACCESS_PASSWORD = stringPreferencesKey("web_server_access_password")
         val WEB_SERVER_LOCALHOST_ONLY = booleanPreferencesKey("web_server_localhost_only")
 
+        // MCP Server
+        val MCP_SERVER_ENABLED = booleanPreferencesKey("mcp_server_enabled")
+        val MCP_SERVER_PORT = intPreferencesKey("mcp_server_port")
+        val MCP_SERVER_LOCALHOST_ONLY = booleanPreferencesKey("mcp_server_localhost_only")
+        val MCP_SERVER_AUTH_ENABLED = booleanPreferencesKey("mcp_server_auth_enabled")
+        val MCP_SERVER_TOKEN = stringPreferencesKey("mcp_server_token")
+
         // 提示词注入
         val MODE_INJECTIONS = stringPreferencesKey("mode_injections")
         val LOREBOOKS = stringPreferencesKey("lorebooks")
@@ -246,6 +253,11 @@ class SettingsStore(
                 webServerJwtEnabled = preferences[WEB_SERVER_JWT_ENABLED] == true,
                 webServerAccessPassword = preferences[WEB_SERVER_ACCESS_PASSWORD] ?: "",
                 webServerLocalhostOnly = preferences[WEB_SERVER_LOCALHOST_ONLY] == true,
+                mcpServerEnabled = preferences[MCP_SERVER_ENABLED] == true,
+                mcpServerPort = preferences[MCP_SERVER_PORT] ?: 8081,
+                mcpServerLocalhostOnly = preferences[MCP_SERVER_LOCALHOST_ONLY] == true,
+                mcpServerAuthEnabled = preferences[MCP_SERVER_AUTH_ENABLED] ?: true,
+                mcpServerToken = preferences[MCP_SERVER_TOKEN] ?: "",
                 backupReminderConfig = preferences[BACKUP_REMINDER_CONFIG]?.let {
                     JsonInstant.decodeFromString(it)
                 } ?: BackupReminderConfig(),
@@ -418,6 +430,11 @@ class SettingsStore(
             preferences[WEB_SERVER_JWT_ENABLED] = settings.webServerJwtEnabled
             preferences[WEB_SERVER_ACCESS_PASSWORD] = settings.webServerAccessPassword
             preferences[WEB_SERVER_LOCALHOST_ONLY] = settings.webServerLocalhostOnly
+            preferences[MCP_SERVER_ENABLED] = settings.mcpServerEnabled
+            preferences[MCP_SERVER_PORT] = settings.mcpServerPort
+            preferences[MCP_SERVER_LOCALHOST_ONLY] = settings.mcpServerLocalhostOnly
+            preferences[MCP_SERVER_AUTH_ENABLED] = settings.mcpServerAuthEnabled
+            preferences[MCP_SERVER_TOKEN] = settings.mcpServerToken
             preferences[BACKUP_REMINDER_CONFIG] = JsonInstant.encodeToString(settings.backupReminderConfig)
             preferences[LAUNCH_COUNT] = settings.launchCount
             preferences[SPONSOR_ALERT_DISMISSED_AT] = settings.sponsorAlertDismissedAt
@@ -566,6 +583,11 @@ data class Settings(
     val webServerJwtEnabled: Boolean = false,
     val webServerAccessPassword: String = "",
     val webServerLocalhostOnly: Boolean = false,
+    val mcpServerEnabled: Boolean = false,
+    val mcpServerPort: Int = 8081,
+    val mcpServerLocalhostOnly: Boolean = false,
+    val mcpServerAuthEnabled: Boolean = true,
+    val mcpServerToken: String = "",
     val backupReminderConfig: BackupReminderConfig = BackupReminderConfig(),
     val launchCount: Int = 0,
     val sponsorAlertDismissedAt: Int = 0,

@@ -13,6 +13,7 @@ import me.rerere.rikkahub.utils.EmojiUtils
 import me.rerere.rikkahub.utils.JsonInstant
 import me.rerere.rikkahub.utils.SoundEffectPlayer
 import me.rerere.rikkahub.utils.UpdateChecker
+import me.rerere.rikkahub.mcp.McpServerManager
 import me.rerere.rikkahub.web.WebServerManager
 import me.rerere.tts.provider.TTSManager
 import org.koin.dsl.module
@@ -125,5 +126,9 @@ val appModule = module {
 
     single {
         WebServerManager(context = get(), appScope = get(), chatService = get(), conversationRepo = get(), folderRepo = get(), settingsStore = get(), filesManager = get())
+    }
+
+    single {
+        McpServerManager(context = get(), appScope = get(), localTools = get())
     }
 }

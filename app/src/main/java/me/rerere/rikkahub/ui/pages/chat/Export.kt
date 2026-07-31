@@ -95,6 +95,7 @@ import me.rerere.rikkahub.ui.components.ui.BitmapComposer
 import me.rerere.rikkahub.ui.components.ui.ChainOfThought
 import me.rerere.rikkahub.ui.components.ui.ChainOfThoughtScope
 import me.rerere.rikkahub.ui.context.LocalNavController
+import me.rerere.rikkahub.ui.context.SettingsRef
 import me.rerere.rikkahub.ui.context.LocalSettings
 import com.dokar.sonner.rememberToasterState
 import me.rerere.rikkahub.ui.context.LocalToaster
@@ -121,7 +122,7 @@ fun ChatExportSheet(
     val toaster = LocalToaster.current
     val scope = rememberCoroutineScope()
     val density = LocalDensity.current
-    val settings = LocalSettings.current
+    val settings = LocalSettings.current.settings
     var imageExportOptions by remember { mutableStateOf(ImageExportOptions()) }
 
     if (visible) {
@@ -403,7 +404,7 @@ private suspend fun exportToImage(
         width = 540.dp,
         screenDensity = density,
         content = {
-            CompositionLocalProvider(LocalSettings provides settings) {
+            CompositionLocalProvider(LocalSettings provides SettingsRef(settings)) {
                 ExportedChatImage(
                     conversation = conversation,
                     messages = messages,
@@ -533,7 +534,7 @@ private fun ExportedChatMessage(
 ) {
     if (message.parts.isEmptyUIMessage()) return
     val context = LocalContext.current
-    val settings = LocalSettings.current
+    val settings = LocalSettings.current.settings
     val model = message.modelId?.let { settings.findModelById(it) }
     // Always show model icon for assistant messages in exported images
     val showModelIcon = message.role == MessageRole.ASSISTANT && prevMessage?.role == MessageRole.USER
