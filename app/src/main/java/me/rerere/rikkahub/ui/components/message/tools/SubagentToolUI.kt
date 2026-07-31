@@ -45,6 +45,7 @@ import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.intOrNull
+import kotlinx.serialization.json.longOrNull
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.Bot
 import me.rerere.rikkahub.data.ai.subagent.SubagentTranscriptStep
@@ -68,6 +69,9 @@ object SubagentToolUI : ToolUIRenderer {
         val streaming: Boolean,
         val succeeded: Boolean,
         val transcript: List<SubagentTranscriptStep>,
+        val depth: Int? = null,
+        val durationMs: Long? = null,
+        val usageTotal: Int? = null,
     )
 
     /** 档案视觉风格: emoji 图标 + 主题色 */
@@ -95,6 +99,9 @@ object SubagentToolUI : ToolUIRenderer {
             streaming = meta["subagent_streaming"]?.jsonPrimitiveOrNull?.booleanOrNull == true,
             succeeded = meta["subagent_succeeded"]?.jsonPrimitiveOrNull?.booleanOrNull == true,
             transcript = transcript,
+            depth = meta["subagent_depth"]?.jsonPrimitiveOrNull?.intOrNull,
+            durationMs = meta["subagent_duration_ms"]?.jsonPrimitiveOrNull?.longOrNull,
+            usageTotal = meta["subagent_usage_total"]?.jsonPrimitiveOrNull?.intOrNull,
         )
     }
 
@@ -106,6 +113,10 @@ object SubagentToolUI : ToolUIRenderer {
     /** 格式化秒数为 mm:ss */
     private fun fmtDuration(sec: Int): String =
         if (sec < 60) "${sec}s" else "${sec / 60}m ${sec % 60}s"
+
+    /** 格式化 token 数为可读形式 (1234 -> "1.2k") */
+    private fun fmtTokens(t: Int): String =
+        if (t >= 1000) "${(t / 100.0).toInt() / 10.0}k" else "$t"
 
     override fun icon(context: ToolUIContext): ImageVector = HugeIcons.Bot
 
@@ -172,7 +183,11 @@ object SubagentToolUI : ToolUIRenderer {
                 Spacer(Modifier.width(8.dp))
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = "${profile ?: "subagent"} · ${style.label}",
+                        text = buildString {
+                            append(profile ?: "subagent")
+                            append(" · ${style.label}")
+                            meta?.depth?.takeIf { it > 1 }?.let { append(" · 深度$it") }
+                        },
                         style = MaterialTheme.typography.labelLarge,
                         fontWeight = FontWeight.Bold,
                         color = style.color,
@@ -215,6 +230,19 @@ object SubagentToolUI : ToolUIRenderer {
                         color = if (meta.succeeded) Color(0xFF34A853) else MaterialTheme.colorScheme.error,
                         steps = null,
                     )
+                    // 统计行: token 消耗 + 总耗时
+                    val stats = buildList {
+                        meta.usageTotal?.let { t -> add("🔥 ${fmtTokens(t)} tokens") }
+                        meta.durationMs?.let { d -> add("⏱ ${fmtDuration((d / 1000).toInt())}") }
+                    }
+                    if (stats.isNotEmpty()) {
+                        ActivityLine(
+                            leading = "ℹ",
+                            text = stats.joinToString(" · "),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            steps = null,
+                        )
+                    }
                 }
             }
         }

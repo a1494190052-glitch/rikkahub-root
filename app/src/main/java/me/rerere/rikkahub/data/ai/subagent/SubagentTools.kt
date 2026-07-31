@@ -104,7 +104,9 @@ $profileListText
                 ?: error("profile_name is required")
             val task = params["task"]?.jsonPrimitive?.contentOrNull ?: error("task is required")
             val description = params["description"]?.jsonPrimitive?.contentOrNull.orEmpty()
+            val t0 = System.currentTimeMillis()
             val result = spawn(profileName, task, description)
+            val durationMs = System.currentTimeMillis() - t0
             val payload = buildJsonObject {
                 put("profile_name", JsonPrimitive(result.profileName))
                 put("succeeded", JsonPrimitive(result.succeeded))
@@ -113,6 +115,12 @@ $profileListText
                 put("depth", JsonPrimitive(result.depth))
                 put("steps", JsonPrimitive(result.steps))
                 put("tool_calls", JsonPrimitive(result.toolCallCount))
+                put("duration_ms", JsonPrimitive(durationMs))
+                result.usage?.let { u ->
+                    put("usage_total", JsonPrimitive(u.totalTokens))
+                    put("usage_prompt", JsonPrimitive(u.promptTokens))
+                    put("usage_completion", JsonPrimitive(u.completionTokens))
+                }
                 result.sessionId?.let { put("session_id", JsonPrimitive(it)) }
             }
             val transcriptMetadata = if (result.transcript.isNotEmpty()) {
@@ -123,6 +131,9 @@ $profileListText
                     put("subagent_profile", JsonPrimitive(result.profileName))
                     put("subagent_steps", JsonPrimitive(result.steps))
                     put("subagent_succeeded", JsonPrimitive(result.succeeded))
+                    put("subagent_depth", JsonPrimitive(result.depth))
+                    put("subagent_duration_ms", JsonPrimitive(durationMs))
+                    result.usage?.let { u -> put("subagent_usage_total", JsonPrimitive(u.totalTokens)) }
                 }
             } else null
             listOf(UIMessagePart.Text(text = payload.toString(), metadata = transcriptMetadata))
@@ -172,12 +183,20 @@ $profileListText
                 val params = args.jsonObject
                 val sessionId = params["session_id"]?.jsonPrimitive?.contentOrNull ?: error("session_id is required")
                 val followUp = params["follow_up"]?.jsonPrimitive?.contentOrNull ?: error("follow_up is required")
+                val t0 = System.currentTimeMillis()
                 val result = resume(sessionId, followUp)
+                val durationMs = System.currentTimeMillis() - t0
                 listOf(UIMessagePart.Text(buildJsonObject {
                     put("profile_name", JsonPrimitive(result.profileName))
                     put("succeeded", JsonPrimitive(result.succeeded))
                     if (!result.error.isNullOrBlank()) put("error", JsonPrimitive(result.error))
                     put("summary", JsonPrimitive(result.summary))
+                    put("duration_ms", JsonPrimitive(durationMs))
+                    result.usage?.let { u ->
+                        put("usage_total", JsonPrimitive(u.totalTokens))
+                        put("usage_prompt", JsonPrimitive(u.promptTokens))
+                        put("usage_completion", JsonPrimitive(u.completionTokens))
+                    }
                 }.toString()))
             },
         )
