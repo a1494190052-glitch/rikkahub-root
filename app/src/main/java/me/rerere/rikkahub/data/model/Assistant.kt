@@ -96,10 +96,14 @@ private val regexCache = SimpleCache.builder<String, Result<Regex>>()
     .expireAfterWrite(10, TimeUnit.MINUTES)
     .build()
 
-private fun compileRegexCached(pattern: String): Regex? {
-    regexCache.getIfPresent(pattern)?.let { return it.getOrNull() }
-    val result = runCatching { Regex(pattern) }.onFailure { it.printStackTrace() }
-    regexCache.put(pattern, result)
+private fun compileRegexCached(
+    pattern: String,
+    options: Set<RegexOption> = emptySet(),
+): Regex? {
+    val cacheKey = if (options.isEmpty()) pattern else pattern + '\u0000' + options.hashCode()
+    regexCache.getIfPresent(cacheKey)?.let { return it.getOrNull() }
+    val result = runCatching { Regex(pattern, options) }.onFailure { it.printStackTrace() }
+    regexCache.put(cacheKey, result)
     return result.getOrNull()
 }
 
