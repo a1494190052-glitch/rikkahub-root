@@ -299,7 +299,6 @@ class ChatService(
         previousJob?.cancel()
         val job = appScope.launch {
             try {
-                Log.i(TAG, "sendMessage: start conv=$conversationId answer=$answer")
                 runCatching { previousJob?.join() }
                 finishInterruptedPendingTools(conversationId)
                 val currentConversation = session.state.value
@@ -309,9 +308,7 @@ class ChatService(
                 val newConversation = currentConversation.copy(
                     messageNodes = currentConversation.messageNodes + UIMessage(role = MessageRole.USER, parts = processedContent).toMessageNode(),
                 )
-                Log.i(TAG, "sendMessage: saving conv nodes=${newConversation.messageNodes.size}")
                 saveConversation(conversationId, newConversation)
-                Log.i(TAG, "sendMessage: saved OK, answer=$answer")
                 if (answer) handleMessageComplete(conversationId)
                 _generationDoneFlow.emit(conversationId)
             } catch (e: Exception) {
@@ -444,7 +441,6 @@ class ChatService(
     // ---- 消息补全 ----
 
     private suspend fun handleMessageComplete(conversationId: Uuid, messageRange: ClosedRange<Int>? = null) {
-        Log.i(TAG, "HMC: start conv=$conversationId range=$messageRange")
         val settings = settingsStore.settingsFlow.first()
         val initialConversation = getConversationFlow(conversationId).value
         val assistant = settings.getAssistantById(initialConversation.assistantId) ?: settings.getCurrentAssistant()
@@ -487,9 +483,7 @@ class ChatService(
             }.collect { chunk ->
                 when (chunk) {
                     is GenerationChunk.Messages -> {
-                        Log.i(TAG, "collect: chunk Messages size=${chunk.messages.size}")
                         val updatedConversation = getConversationFlow(conversationId).value.updateCurrentMessages(chunk.messages)
-                        Log.i(TAG, "collect: updated nodes=${updatedConversation.messageNodes.size}")
                         updateConversation(conversationId, updatedConversation)
                         chunk.messages.lastOrNull()?.let { lastMessage -> appEventBus.tryEmit(AppEvent.ChatGenerationUpdate(conversationId, lastMessage, senderName)) }
                     }
