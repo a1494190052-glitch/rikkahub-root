@@ -236,7 +236,7 @@ class SubagentOrchestrator(
         profileName: String,
         depth: Int,
         innerTranscript: List<SubagentTranscriptStep>,
-        listSerializer: ListSerializer<SubagentTranscriptStep>,
+        listSerializer: kotlinx.serialization.KSerializer<List<SubagentTranscriptStep>>,
         partialOutput: UIMessagePart.Text,
     ): UIMessagePart.Tool {
         val existingMeta = part.output.filterIsInstance<UIMessagePart.Text>().firstOrNull()?.metadata
