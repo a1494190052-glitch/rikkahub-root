@@ -123,7 +123,7 @@ fun ChatMessage(
     onToolAnswer: ((toolCallId: String, answer: String) -> Unit)? = null,
 ) {
     val message = node.messages[node.selectIndex]
-    val settings = LocalSettings.current.displaySetting
+    val settings = LocalSettings.current.settings.displaySetting
     val chatFontFamily = LocalChatFontFamily.current ?: rememberChatFontFamily(settings)
     val textStyle = LocalTextStyle.current.copy(
         fontSize = LocalTextStyle.current.fontSize * settings.fontSizeRatio,
@@ -287,7 +287,7 @@ private fun MessagePartsBlock(
 
     // 消息输出HapticFeedback
     val hapticFeedback = LocalHapticFeedback.current
-    val settings = LocalSettings.current
+    val settings = LocalSettings.current.settings
     val partsState by rememberUpdatedState(parts)
 
     val handleClickCitation: (String) -> Unit = remember {

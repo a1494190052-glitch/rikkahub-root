@@ -82,7 +82,7 @@ private class ReasoningState(
 
 @Composable
 private fun rememberReasoningState(reasoning: UIMessagePart.Reasoning): Pair<ReasoningState, Boolean> {
-    val settings = LocalSettings.current
+    val settings = LocalSettings.current.settings
     val loading = reasoning.finishedAt == null
     val scrollState = rememberScrollState()
 

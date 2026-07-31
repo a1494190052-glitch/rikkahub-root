@@ -76,7 +76,7 @@ private fun generateMcpToken(): String {
 fun SettingMcpServerPage() {
     val mcpServerManager: McpServerManager = koinInject()
     val settingsStore: SettingsStore = koinInject()
-    val settings = LocalSettings.current
+    val settings = LocalSettings.current.settings
     val serverState by mcpServerManager.state.collectAsStateWithLifecycle()
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
     val scope = rememberCoroutineScope()

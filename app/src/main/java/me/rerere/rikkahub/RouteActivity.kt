@@ -73,6 +73,7 @@ import me.rerere.rikkahub.ui.context.LocalASRState
 import me.rerere.rikkahub.ui.context.LocalNavController
 import me.rerere.rikkahub.ui.context.LocalSettings
 import me.rerere.rikkahub.ui.context.LocalSharedTransitionScope
+import me.rerere.rikkahub.ui.context.SettingsRef
 import me.rerere.rikkahub.ui.context.LocalTTSState
 import me.rerere.rikkahub.ui.context.LocalToaster
 import me.rerere.rikkahub.ui.context.Navigator
@@ -252,6 +253,8 @@ class RouteActivity : ComponentActivity() {
     fun AppRoutes() {
         val toastState = rememberToasterState()
         val settings by settingsStore.settingsFlow.collectAsStateWithLifecycle()
+        // 稳定引用：settings 实例不变则 ref 不变 → CompositionLocalMap 比较退化为引用比较 O(1)
+        val settingsRef = remember(settings) { SettingsRef(settings) }
         val tts = rememberCustomTtsState()
         val asr = rememberCustomAsrState()
         val eventBus = koinInject<AppEventBus>()
@@ -288,7 +291,7 @@ class RouteActivity : ComponentActivity() {
             CompositionLocalProvider(
                 LocalNavController provides Navigator(backStack),
                 LocalSharedTransitionScope provides this,
-                LocalSettings provides settings,
+                LocalSettings provides settingsRef,
                 LocalHighlighter provides highlighter,
                 LocalToaster provides toastState,
                 LocalTTSState provides tts,

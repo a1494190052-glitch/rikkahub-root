@@ -105,7 +105,7 @@ internal fun FilesPicker(
     onPickAudio: () -> Unit,
     onPickFile: () -> Unit,
 ) {
-    val settings = LocalSettings.current
+    val settings = LocalSettings.current.settings
     val provider = settings.getCurrentChatModel()?.findProvider(providers = settings.providers)
     val navController = LocalNavController.current
     val workspaceRepository: WorkspaceRepository = koinInject()

@@ -421,7 +421,7 @@ private fun TextInputRow(
     completionProviders: List<ChatCompletionProvider>,
     onSendMessage: () -> Unit,
 ) {
-    val settings = LocalSettings.current
+    val settings = LocalSettings.current.settings
     val filesManager: FilesManager = koinInject()
     val assistant = settings.getCurrentAssistant()
     val quickMessages = remember(settings.quickMessages, assistant.quickMessageIds) {

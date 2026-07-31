@@ -71,7 +71,7 @@ import org.koin.compose.koinInject
 fun SettingWebPage() {
     val webServerManager: WebServerManager = koinInject()
     val settingsStore: SettingsStore = koinInject()
-    val settings = LocalSettings.current
+    val settings = LocalSettings.current.settings
     val serverState by webServerManager.state.collectAsStateWithLifecycle()
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
     val scope = rememberCoroutineScope()

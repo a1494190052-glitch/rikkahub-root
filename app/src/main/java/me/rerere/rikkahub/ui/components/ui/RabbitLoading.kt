@@ -14,7 +14,7 @@ import me.rerere.rikkahub.ui.context.LocalSettings
 
 @Composable
 fun RabbitLoadingIndicator(modifier: Modifier = Modifier) {
-    val useAppIconStyleLoadingIndicator = LocalSettings.current.displaySetting.useAppIconStyleLoadingIndicator
+    val useAppIconStyleLoadingIndicator = LocalSettings.current.settings.displaySetting.useAppIconStyleLoadingIndicator
     val primaryColor = MaterialTheme.colorScheme.primary.toArgb()
 
     if (useAppIconStyleLoadingIndicator) {
