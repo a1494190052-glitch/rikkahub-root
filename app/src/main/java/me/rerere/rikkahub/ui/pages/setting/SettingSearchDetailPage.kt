@@ -939,6 +939,17 @@ internal fun CustomJsOptions(
     val highlighter = LocalHighlighter.current
     val darkMode = LocalDarkMode.current
 
+    // 异步代码高亮：分词在后台执行，version 订阅触发重组刷新（避免主线程 runBlocking 卡输入）
+    val scriptHighlightTransform = remember(highlighter, darkMode) {
+        HighlightCodeVisualTransformation(
+            language = "javascript",
+            highlighter = highlighter,
+            darkMode = darkMode,
+        )
+    }
+    @Suppress("UNUSED_VARIABLE")
+    val scriptHighlightVersion = scriptHighlightTransform.version.intValue
+
     FormItem(
         label = {
             Text(stringResource(R.string.search_detail_search_script))
@@ -952,11 +963,7 @@ internal fun CustomJsOptions(
             modifier = Modifier.fillMaxWidth(),
             minLines = 8,
             maxLines = 20,
-            visualTransformation = HighlightCodeVisualTransformation(
-                language = "javascript",
-                highlighter = highlighter,
-                darkMode = darkMode
-            ),
+            visualTransformation = scriptHighlightTransform,
             textStyle = MaterialTheme.typography.bodySmall.merge(fontFamily = JetbrainsMono),
         )
     }
@@ -984,11 +991,7 @@ internal fun CustomJsOptions(
                     color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
                 )
             },
-            visualTransformation = HighlightCodeVisualTransformation(
-                language = "javascript",
-                highlighter = highlighter,
-                darkMode = darkMode
-            ),
+            visualTransformation = scriptHighlightTransform,
             textStyle = MaterialTheme.typography.bodySmall.merge(fontFamily = JetbrainsMono),
         )
     }

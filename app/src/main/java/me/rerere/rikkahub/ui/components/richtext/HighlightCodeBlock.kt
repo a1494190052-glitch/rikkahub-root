@@ -55,10 +55,12 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.runBlocking
 import kotlinx.datetime.TimeZone
 import kotlinx.datetime.toLocalDateTime
 import me.rerere.highlight.HighlightText
@@ -515,31 +517,53 @@ private fun buildCodePreviewHtml(code: String, language: String): String {
 class HighlightCodeVisualTransformation(
     val language: String,
     val highlighter: Highlighter,
-    val darkMode: Boolean
+    val darkMode: Boolean,
 ) : VisualTransformation {
+
+    /**
+     * 高亮完成信号：异步分词结果入缓存后自增。
+     * 调用点在组合中读取它，使异步结果能触发重组刷新显示。
+     */
+    val version = mutableIntStateOf(0)
+
+    // text+language+darkMode -> 高亮结果，简单 LRU（超限清空）
+    private val cache = object : LinkedHashMap<String, AnnotatedString>(128, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, AnnotatedString>?) = size > 128
+    }
+    private val pendingKeys = java.util.Collections.newSetFromMap(ConcurrentHashMap<String, Boolean>())
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+
     override fun filter(text: AnnotatedString): TransformedText {
-        val annotatedString = try {
-            val colorPalette = if (darkMode) AtomOneDarkPalette else AtomOneLightPalette
-            if (text.text.isEmpty()) {
-                AnnotatedString("")
-            } else {
-                runBlocking {
+        if (text.text.isEmpty()) {
+            return TransformedText(AnnotatedString(""), OffsetMapping.Identity)
+        }
+        val key = language + '|' + darkMode + '|' + text.text.length + '|' + text.text.hashCode()
+        synchronized(cache) {
+            cache[key]?.let { return TransformedText(it, OffsetMapping.Identity) }
+        }
+        // 未命中：后台分词（QuickJS 在 Default 线程），不阻塞主线程
+        if (pendingKeys.add(key)) {
+            val palette = if (darkMode) AtomOneDarkPalette else AtomOneLightPalette
+            scope.launch {
+                val annotated = try {
                     val tokens = highlighter.highlight(text.text, language)
                     buildAnnotatedString {
                         tokens.forEach { token ->
-                            buildHighlightText(token, colorPalette)
+                            buildHighlightText(token, palette)
                         }
                     }
+                } catch (e: Exception) {
+                    AnnotatedString(text.text)
                 }
+                synchronized(cache) {
+                    cache[key] = annotated
+                }
+                pendingKeys.remove(key)
+                version.intValue++
             }
-        } catch (e: Exception) {
-            AnnotatedString(text.text)
         }
-
-        return TransformedText(
-            text = annotatedString,
-            offsetMapping = OffsetMapping.Identity
-        )
+        // 返回未高亮原文，异步结果就绪后由 version 触发重组刷新
+        return TransformedText(AnnotatedString(text.text), OffsetMapping.Identity)
     }
 
     companion object {
