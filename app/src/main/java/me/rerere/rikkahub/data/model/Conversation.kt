@@ -57,25 +57,18 @@ data class Conversation(
     }
 
     fun updateCurrentMessages(messages: List<UIMessage>): Conversation {
+        // 2026-07-31 诊断版：H2 节点级复制暂时回退到原版（无条件复制），
+        // 排查 r253 发消息无回复问题；确认根因后再恢复优化。
         val newNodes = this.messageNodes.toMutableList()
-        var changed = false
 
         messages.forEachIndexed { index, message ->
             val node = newNodes
                 .getOrElse(index) { message.toMessageNode() }
 
-            val existingIdx = node.messages.indexOfFirst { it.id == message.id }
-            if (existingIdx >= 0 && node.messages[existingIdx] == message) {
-                // 节点已包含完全相同的消息（流式时未变化的节点）：
-                // 复用原节点引用，跳过复制，避免每次 chunk 全量拷贝整份会话
-                if (index > newNodes.lastIndex) newNodes.add(node)
-                return@forEachIndexed
-            }
-
             val newMessages = node.messages.toMutableList()
             var newMessageIndex = node.selectIndex
-            if (existingIdx >= 0) {
-                newMessages[existingIdx] = message
+            if (newMessages.any { it.id == message.id }) {
+                newMessages[newMessages.indexOfFirst { it.id == message.id }] = message
             } else {
                 newMessages.add(message)
                 newMessageIndex = newMessages.lastIndex
@@ -92,10 +85,11 @@ data class Conversation(
             } else {
                 newNodes[index] = newNode
             }
-            changed = true
         }
 
-        return if (changed) this.copy(messageNodes = newNodes) else this
+        return this.copy(
+            messageNodes = newNodes
+        )
     }
 
     companion object {

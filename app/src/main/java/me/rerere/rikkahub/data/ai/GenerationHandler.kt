@@ -91,6 +91,7 @@ class GenerationHandler(
         conversationLorebookIds: Set<Uuid> = emptySet(),
         workspaceCwd: String? = null,
     ): Flow<GenerationChunk> = flow {
+        Log.i(TAG, "generateText: start steps=$maxSteps stream=${assistant?.streamOutput} msgCount=${messages.size}")
         val provider = model.findProvider(settings.providers) ?: error("Provider not found")
         val providerImpl = providerManager.getProviderByType(provider)
 
@@ -156,6 +157,7 @@ class GenerationHandler(
                         // outputTransformers 的 transform 均为 identity（视觉变换走 visualTransform），
                         // 流式路径直接推进原始消息，避免每 chunk 对完整列表白跑 transforms。
                         messages = it
+                        Log.i(TAG, "onUpdateMessages: size=${it.size} lastRole=${it.lastOrNull()?.role}")
                         // 流式节流: 限制 UI emit 频率(~12次/秒)。messages 每 chunk 都更新保证正确，
                         // 完整最终状态由工具循环后的 emit 兜底，故跳过中间 emit 安全。
                         val now = System.currentTimeMillis()
