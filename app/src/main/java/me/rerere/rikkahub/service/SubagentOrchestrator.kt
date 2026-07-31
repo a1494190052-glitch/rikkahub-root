@@ -2,11 +2,13 @@ package me.rerere.rikkahub.service
 
 import android.util.Log
 import kotlinx.coroutines.flow.first
+import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.encodeToJsonElement
+import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import me.rerere.rikkahub.utils.jsonPrimitiveOrNull
@@ -173,7 +175,7 @@ class SubagentOrchestrator(
         runCatching {
             val transcript = SubagentHost.buildTranscript(subMessages, truncateToolOutput = 2000)
             if (transcript.isEmpty()) return@runCatching
-            val listSerializer = kotlinx.serialization.builtins.ListSerializer(SubagentTranscriptStep.serializer())
+            val listSerializer = ListSerializer(SubagentTranscriptStep.serializer())
             val transcriptMetadata = buildJsonObject {
                 put("subagent_transcript", json.encodeToJsonElement(listSerializer, transcript))
                 put("subagent_profile", JsonPrimitive(profileName))
@@ -234,7 +236,7 @@ class SubagentOrchestrator(
         profileName: String,
         depth: Int,
         innerTranscript: List<SubagentTranscriptStep>,
-        listSerializer: kotlinx.serialization.builtins.ListSerializer<SubagentTranscriptStep>,
+        listSerializer: ListSerializer<SubagentTranscriptStep>,
         partialOutput: UIMessagePart.Text,
     ): UIMessagePart.Tool {
         val existingMeta = part.output.filterIsInstance<UIMessagePart.Text>().firstOrNull()?.metadata
