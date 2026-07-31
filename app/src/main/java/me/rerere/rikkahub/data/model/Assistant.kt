@@ -223,6 +223,15 @@ data class Lorebook(
     val entries: List<PromptInjection.RegexInjection> = emptyList(),
 )
 
+/**
+ * 编译后的正则缓存：isTriggered 每次匹配都重新 Regex.compile 非常昂贵
+ * （每条消息、每个 keyword 都编译一次）。缓存后同一 keyword 只编译一次。
+ * 10 分钟过期防止无界增长；ConcurrentHashMap 线程安全。
+ */
+private val regexCache = SimpleCache.builder<String, Regex>()
+    .expireAfterWrite(10, TimeUnit.MINUTES)
+    .build()
+
 fun PromptInjection.RegexInjection.isTriggered(context: String): Boolean {
     if (!enabled) return false
     if (constantActive) return true
@@ -231,7 +240,10 @@ fun PromptInjection.RegexInjection.isTriggered(context: String): Boolean {
         if (useRegex) {
             try {
                 val options = if (caseSensitive) emptySet() else setOf(RegexOption.IGNORE_CASE)
-                Regex(keyword, options).containsMatchIn(context)
+                val cacheKey = keyword + '\u0000' + (if (caseSensitive) 1 else 0)
+                val regex = regexCache.getIfPresent(cacheKey)
+                    ?: Regex(keyword, options).also { regexCache.put(cacheKey, it) }
+                regex.containsMatchIn(context)
             } catch (e: Exception) { false }
         } else {
             if (caseSensitive) context.contains(keyword) else context.contains(keyword, ignoreCase = true)
