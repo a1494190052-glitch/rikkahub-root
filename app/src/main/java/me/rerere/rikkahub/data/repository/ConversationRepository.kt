@@ -34,7 +34,7 @@ class ConversationRepository(
     private val filesManager: FilesManager,
     private val messageFtsManager: MessageFtsManager,
     // 内存缓存：nodeId -> 上次保存时的内容指纹。避免每次保存对未变节点全量 JSON 编码比较。
-    private val lastSavedNodeHash = java.util.concurrent.ConcurrentHashMap<String, Long>(),
+    private val lastSavedNodeHash: java.util.concurrent.ConcurrentHashMap<String, Long> = java.util.concurrent.ConcurrentHashMap(),
 ) {
     companion object {
         private const val PAGE_SIZE = 20
