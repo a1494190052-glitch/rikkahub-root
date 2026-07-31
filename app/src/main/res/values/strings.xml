@@ -139,6 +139,8 @@
   <string name="assistant_page_tab_basic">Basic Settings</string>
   <string name="assistant_page_tab_extensions">Extensions</string>
   <string name="assistant_page_tab_local_tools">Local Tools</string>
+  <string name="assistant_page_tab_subagent">Subagents</string>
+  <string name="assistant_detail_subagent_desc">Configure subagent profiles</string>
   <string name="assistant_page_tab_mcp">MCP</string>
   <string name="assistant_page_tab_memory">Memory</string>
   <string name="assistant_page_tab_prompt">Prompts</string>

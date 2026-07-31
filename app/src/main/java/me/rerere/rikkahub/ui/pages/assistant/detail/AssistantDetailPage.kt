@@ -142,6 +142,13 @@ fun AssistantDetailPage(id: String) {
                         headlineContent = { Text(stringResource(R.string.assistant_page_tab_local_tools)) },
                         trailingContent = { Icon(HugeIcons.ArrowRight01, null) },
                     )
+                    item(
+                        onClick = { navController.navigate(Screen.AssistantSubagent(id)) },
+                        leadingContent = { Icon(HugeIcons.Bot, null) },
+                        supportingContent = { Text(stringResource(R.string.assistant_detail_subagent_desc)) },
+                        headlineContent = { Text(stringResource(R.string.assistant_page_tab_subagent)) },
+                        trailingContent = { Icon(HugeIcons.ArrowRight01, null) },
+                    )
                 }
             }
         }

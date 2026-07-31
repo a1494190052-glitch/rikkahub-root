@@ -139,6 +139,8 @@
   <string name="assistant_page_tab_basic">基础设定</string>
   <string name="assistant_page_tab_extensions">扩展管理</string>
   <string name="assistant_page_tab_local_tools">本地工具</string>
+  <string name="assistant_page_tab_subagent">子代理</string>
+  <string name="assistant_detail_subagent_desc">配置子代理 Profile</string>
   <string name="assistant_page_tab_mcp">MCP</string>
   <string name="assistant_page_tab_memory">记忆</string>
   <string name="assistant_page_tab_prompt">提示词</string>
