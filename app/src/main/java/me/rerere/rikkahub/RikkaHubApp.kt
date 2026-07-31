@@ -387,6 +387,14 @@ class RikkaHubApp : Application() {
             .build()
         notificationManager.createNotificationChannel(webServerChannel)
 
+        val mcpServerChannel = NotificationChannelCompat
+            .Builder(MCP_SERVER_NOTIFICATION_CHANNEL_ID, NotificationManagerCompat.IMPORTANCE_LOW)
+            .setName(getString(R.string.notification_channel_mcp_server))
+            .setVibrationEnabled(false)
+            .setShowBadge(false)
+            .build()
+        notificationManager.createNotificationChannel(mcpServerChannel)
+
         // 定时任务主动消息渠道 (高重要性: 主动消息需要提醒)
         val scheduledTaskChannel = NotificationChannelCompat
             .Builder(

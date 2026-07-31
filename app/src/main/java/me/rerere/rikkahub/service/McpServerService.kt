@@ -1,5 +1,7 @@
 package me.rerere.rikkahub.service
 
+import android.app.NotificationChannel
+import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
 import android.content.Intent
@@ -98,6 +100,26 @@ class McpServerService : Service() {
             }
         }
         return START_NOT_STICKY
+    }
+
+    override fun onCreate() {
+        super.onCreate()
+        // 双保险: 即使 Application 的渠道创建缺失/失败, Service 也保证渠道存在,
+        // 否则 startForeground 因渠道不存在抛 CannotPostForegroundServiceNotificationException (异步, 无法捕获).
+        ensureNotificationChannel()
+    }
+
+    private fun ensureNotificationChannel() {
+        val notificationManager = getSystemService(NotificationManager::class.java)
+        if (notificationManager.getNotificationChannel(MCP_SERVER_NOTIFICATION_CHANNEL_ID) == null) {
+            notificationManager.createNotificationChannel(
+                NotificationChannel(
+                    MCP_SERVER_NOTIFICATION_CHANNEL_ID,
+                    getString(R.string.notification_channel_mcp_server),
+                    NotificationManager.IMPORTANCE_LOW
+                ).apply { setShowBadge(false) }
+            )
+        }
     }
 
     override fun onDestroy() {
