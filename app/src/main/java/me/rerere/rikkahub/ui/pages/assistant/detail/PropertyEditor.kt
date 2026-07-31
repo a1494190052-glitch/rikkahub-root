@@ -137,11 +137,13 @@ fun CustomBodies(customBodies: List<CustomBody>, onUpdate: (List<CustomBody>) ->
             }
             var jsonParseError by remember { mutableStateOf<String?>(null) }
 
-            val bodyHighlightTransform = remember(LocalHighlighter.current, LocalDarkMode.current) {
+            val bodyHighlighter = LocalHighlighter.current
+            val bodyDarkMode = LocalDarkMode.current
+            val bodyHighlightTransform = remember(bodyHighlighter, bodyDarkMode) {
                 HighlightCodeVisualTransformation(
                     language = "json",
-                    highlighter = LocalHighlighter.current,
-                    darkMode = LocalDarkMode.current,
+                    highlighter = bodyHighlighter,
+                    darkMode = bodyDarkMode,
                 )
             }
             // 订阅异步高亮完成信号：分词在后台执行，完成后触发重组刷新高亮
