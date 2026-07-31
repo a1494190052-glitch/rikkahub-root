@@ -95,6 +95,7 @@ import me.rerere.rikkahub.ui.components.ui.BitmapComposer
 import me.rerere.rikkahub.ui.components.ui.ChainOfThought
 import me.rerere.rikkahub.ui.components.ui.ChainOfThoughtScope
 import me.rerere.rikkahub.ui.context.LocalNavController
+import me.rerere.rikkahub.ui.context.SettingsRef
 import me.rerere.rikkahub.ui.context.LocalSettings
 import com.dokar.sonner.rememberToasterState
 import me.rerere.rikkahub.ui.context.LocalToaster
