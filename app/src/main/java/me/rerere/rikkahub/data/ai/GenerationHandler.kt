@@ -41,6 +41,7 @@ import java.io.File
 import me.rerere.rikkahub.data.ai.transformers.onGenerationFinish
 import me.rerere.rikkahub.data.ai.transformers.transforms
 import me.rerere.rikkahub.data.ai.transformers.visualTransforms
+import me.rerere.rikkahub.data.ai.transformers.visualTransformLast
 import me.rerere.rikkahub.data.ai.tools.buildMemoryTools
 import me.rerere.rikkahub.service.LiveUpdateManager
 import me.rerere.rikkahub.data.datastore.Settings
@@ -103,38 +104,39 @@ class GenerationHandler(
         // Ported from OpenMinis.
         val loopDetector = ToolLoopDetector(json = json)
 
+        // 工具列表在生成过程中不变化：循环外构建一次，避免每 step 重建（maxSteps 可达 256）
+        val toolsInternal = buildList {
+            Log.i(TAG, "generateInternal: build tools($assistant)")
+            if (assistant?.enableMemory == true) {
+                val memoryAssistantId = if (assistant.useGlobalMemory) {
+                    MemoryRepository.GLOBAL_MEMORY_ID
+                } else {
+                    assistant.id.toString()
+                }
+                buildMemoryTools(
+                    json = json,
+                    onCreation = { content ->
+                        memoryRepo.addMemory(memoryAssistantId, content)
+                    },
+                    onUpdate = { id, content ->
+                        memoryRepo.updateContent(id, content)
+                    },
+                    onDelete = { id ->
+                        memoryRepo.deleteMemory(id)
+                    },
+                    onSearch = { query, topK ->
+                        memoryRepo.searchMemories(memoryAssistantId, query, topK)
+                    },
+                    onRecall = { context, topK ->
+                        memoryRepo.getRelevantMemories(memoryAssistantId, context, topK)
+                    },
+                ).let(this::addAll)
+            }
+            addAll(tools)
+        }.distinctBy { it.name }
+
         for (stepIndex in 0 until maxSteps) {
             Log.i(TAG, "streamText: start step #$stepIndex (${model.id})")
-
-            val toolsInternal = buildList {
-                Log.i(TAG, "generateInternal: build tools($assistant)")
-                if (assistant?.enableMemory == true) {
-                    val memoryAssistantId = if (assistant.useGlobalMemory) {
-                        MemoryRepository.GLOBAL_MEMORY_ID
-                    } else {
-                        assistant.id.toString()
-                    }
-                    buildMemoryTools(
-                        json = json,
-                        onCreation = { content ->
-                            memoryRepo.addMemory(memoryAssistantId, content)
-                        },
-                        onUpdate = { id, content ->
-                            memoryRepo.updateContent(id, content)
-                        },
-                        onDelete = { id ->
-                            memoryRepo.deleteMemory(id)
-                        },
-                        onSearch = { query, topK ->
-                            memoryRepo.searchMemories(memoryAssistantId, query, topK)
-                        },
-                        onRecall = { context, topK ->
-                            memoryRepo.getRelevantMemories(memoryAssistantId, context, topK)
-                        },
-                    ).let(this::addAll)
-                }
-                addAll(tools)
-            }.distinctBy { it.name }
 
             // Check if we have tool calls ready to continue after user interaction.
             val pendingTools = messages.lastOrNull()?.getTools()?.filter {
@@ -151,13 +153,9 @@ class GenerationHandler(
                     settings = settings,
                     messages = messages,
                     onUpdateMessages = {
-                        messages = it.transforms(
-                            transformers = outputTransformers,
-                            context = context,
-                            model = model,
-                            assistant = assistant,
-                            settings = settings
-                        )
+                        // outputTransformers 的 transform 均为 identity（视觉变换走 visualTransform），
+                        // 流式路径直接推进原始消息，避免每 chunk 对完整列表白跑 transforms。
+                        messages = it
                         // 流式节流: 限制 UI emit 频率(~12次/秒)。messages 每 chunk 都更新保证正确，
                         // 完整最终状态由工具循环后的 emit 兜底，故跳过中间 emit 安全。
                         val now = System.currentTimeMillis()
@@ -165,7 +163,8 @@ class GenerationHandler(
                             lastStreamEmit = now
                             emit(
                                 GenerationChunk.Messages(
-                                    messages.visualTransforms(
+                                    // 增量视觉变换：流式只有最后一条消息在变，仅变换末条，其余复用
+                                    messages.visualTransformLast(
                                         transformers = outputTransformers,
                                         context = context,
                                         model = model,

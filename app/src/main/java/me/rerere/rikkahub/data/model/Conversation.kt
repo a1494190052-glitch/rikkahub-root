@@ -58,15 +58,24 @@ data class Conversation(
 
     fun updateCurrentMessages(messages: List<UIMessage>): Conversation {
         val newNodes = this.messageNodes.toMutableList()
+        var changed = false
 
         messages.forEachIndexed { index, message ->
             val node = newNodes
                 .getOrElse(index) { message.toMessageNode() }
 
+            val existingIdx = node.messages.indexOfFirst { it.id == message.id }
+            if (existingIdx >= 0 && node.messages[existingIdx] == message) {
+                // 节点已包含完全相同的消息（流式时未变化的节点）：
+                // 复用原节点引用，跳过复制，避免每次 chunk 全量拷贝整份会话
+                if (index > newNodes.lastIndex) newNodes.add(node)
+                return@forEachIndexed
+            }
+
             val newMessages = node.messages.toMutableList()
             var newMessageIndex = node.selectIndex
-            if (newMessages.any { it.id == message.id }) {
-                newMessages[newMessages.indexOfFirst { it.id == message.id }] = message
+            if (existingIdx >= 0) {
+                newMessages[existingIdx] = message
             } else {
                 newMessages.add(message)
                 newMessageIndex = newMessages.lastIndex
@@ -83,11 +92,10 @@ data class Conversation(
             } else {
                 newNodes[index] = newNode
             }
+            changed = true
         }
 
-        return this.copy(
-            messageNodes = newNodes
-        )
+        return if (changed) this.copy(messageNodes = newNodes) else this
     }
 
     companion object {
@@ -118,6 +126,13 @@ data class MessageNode(
     } else {
         messages[selectIndex]
     }
+
+    /**
+     * 轻量内容指纹：基于消息列表的确定性值哈希（UIMessage/UIMessagePart 均为
+     * data class，内容相同则 hash 相同）。用于保存前快速判断节点是否变化，
+     * 避免对未变节点做全量 JSON 序列化比较。64 位混合，碰撞概率工程上可忽略。
+     */
+    fun quickHash(): Long = messages.hashCode().toLong() * 31 + selectIndex
 
     val role get() = messages.firstOrNull()?.role ?: MessageRole.USER
 
