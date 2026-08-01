@@ -24,7 +24,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.MaterialTheme
@@ -270,9 +269,9 @@ private fun CodeBlockWithLineNumbersWrapped(
     val lineNumberWidth = remember(displayLines.size) {
         displayLines.size.toString().length
     }
-    SelectionContainer {
-        Column {
-            displayLines.forEachIndexed { index, line ->
+    // 不用 SelectionContainer：可选择文本慢路径在 LazyColumn 滚动时每帧命中测试，长代码块掉帧严重
+    Column {
+        displayLines.forEachIndexed { index, line ->
                 Row(
                     modifier = Modifier.fillMaxWidth()
                 ) {
@@ -299,7 +298,6 @@ private fun CodeBlockWithLineNumbersWrapped(
                 }
             }
         }
-    }
 }
 
 @Composable
@@ -343,20 +341,18 @@ private fun CodeBlockDefault(
             }
         }
 
-        // 代码列
-        SelectionContainer {
-            HighlightText(
-                code = displayCode,
-                language = language,
-                modifier = Modifier.animateContentSize(),
-                fontSize = textStyle.fontSize,
-                lineHeight = textStyle.lineHeight,
-                colors = colorPalette,
-                overflow = TextOverflow.Visible,
-                softWrap = autoWrap,
-                fontFamily = JetbrainsMono
-            )
-        }
+        // 代码列（不用 SelectionContainer，避免可选择文本慢路径拖慢滚动）
+        HighlightText(
+            code = displayCode,
+            language = language,
+            modifier = Modifier.animateContentSize(),
+            fontSize = textStyle.fontSize,
+            lineHeight = textStyle.lineHeight,
+            colors = colorPalette,
+            overflow = TextOverflow.Visible,
+            softWrap = autoWrap,
+            fontFamily = JetbrainsMono
+        )
     }
 }
 
