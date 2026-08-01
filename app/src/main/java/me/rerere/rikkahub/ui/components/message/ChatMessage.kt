@@ -18,7 +18,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LocalTextStyle
@@ -427,17 +426,10 @@ private fun MessagePartsBlock(
                             }
                         }
 
-                        // 流式生成期间不启用 SelectionContainer：Markdown 在不断重渲染，
-                        // 内部可选择的 Text 会频繁注册/注销，与 Compose 选择工具栏在绘制阶段
-                        // 对 selectable 列表的排序产生并发修改，导致 ConcurrentModificationException。
-                        // 生成结束后内容稳定，再启用文本选择。
-                        if (loading) {
-                            textContent()
-                        } else {
-                            SelectionContainer {
-                                textContent()
-                            }
-                        }
+                        // 不使用 SelectionContainer：它强制内部文本走"可选择"慢路径，
+                        // 长对话滚动时每个可见文本都要参与命中测试，是滑动掉帧的主要来源之一。
+                        // 文本复制可走消息操作按钮的"选择复制"入口。
+                        textContent()
                     }
 
                     is UIMessagePart.Video -> {
