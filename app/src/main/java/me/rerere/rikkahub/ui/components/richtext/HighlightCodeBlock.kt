@@ -115,8 +115,11 @@ fun HighlightCodeBlock(
     val settings = LocalSettings.current.settings
     val normalizedLanguage = remember(language) { language.lowercase() }
     val canInlinePreview = completeCodeBlock && normalizedLanguage in PREVIEWABLE_LANGUAGES
+    // 默认关闭内联 WebView 预览：长对话里多个 html/svg 代码块会叠多个 WebView，
+    // LazyColumn 滚动时反复创建/销毁是掉帧主源。默认先渲染为高亮代码（快），
+    // 需要看渲染效果的可以点代码块标题栏的"预览"图标手动切换。
     var previewMode by remember(canInlinePreview, code, normalizedLanguage) {
-        mutableStateOf(canInlinePreview)
+        mutableStateOf(false)
     }
 
     var isExpanded by remember(settings.displaySetting.codeBlockAutoCollapse) {

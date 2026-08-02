@@ -57,8 +57,12 @@ data class Conversation(
     }
 
     fun updateCurrentMessages(messages: List<UIMessage>): Conversation {
-        // 2026-07-31 诊断版：H2 节点级复制暂时回退到原版（无条件复制），
-        // 排查 r253 发消息无回复问题；确认根因后再恢复优化。
+        // 流式渲染优化：对内容未发生变化的节点复用原对象，避免每次 token 更新
+        // 都全量浅拷贝 messageNodes 造成整表重组。判断基于修改后的消息列表
+        // 与原列表的结构相等性（data class List 逐元素 equals）；某条 AI 回复
+        // 真正在变化时该 node 依然会得到重建，语义与原版完全一致。
+        // （此前 H2 优化曾因 r253 发消息无回复问题被回退，本次采用"内容变了才重建"
+        //   的保守策略，未变节点保持引用相等，杜绝重组扩散与数据不一致。）
         val newNodes = this.messageNodes.toMutableList()
 
         messages.forEachIndexed { index, message ->
@@ -72,6 +76,11 @@ data class Conversation(
             } else {
                 newMessages.add(message)
                 newMessageIndex = newMessages.lastIndex
+            }
+
+            // 内容无变化：复用原 node（保持引用相等，LazyColumn 可跳过重组该条目）
+            if (newMessages == node.messages && newMessageIndex == node.selectIndex) {
+                return@forEachIndexed
             }
 
             val newNode = node.copy(
