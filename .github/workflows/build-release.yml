@@ -1,0 +1,91 @@
+name: RikkaHub Root Release Build
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: rikkahub-root-release
+  cancel-in-progress: true
+
+jobs:
+  build-release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: pnpm
+          cache-dependency-path: web-ui/pnpm-lock.yaml
+
+      - name: Install web-ui dependencies
+        working-directory: web-ui
+        run: pnpm install --frozen-lockfile
+
+      - name: Setup Android SDK
+        run: |
+          yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --sdk_root=$ANDROID_HOME --licenses > /dev/null
+          $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --sdk_root=$ANDROID_HOME \
+            "platform-tools" "platforms;android-37.0" "build-tools;36.1.0" "ndk;28.2.13676358"
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Generate signing keystore and config
+        run: |
+          keytool -genkeypair -v \
+            -keystore app/app.key \
+            -keyalg RSA -keysize 2048 -validity 10000 \
+            -alias rikkahub-root-release \
+            -storepass android123 -keypass android123 \
+            -dname "CN=RikkaHub Root, OU=Dev, O=RikkaHub, L=Beijing, ST=Beijing, C=CN"
+
+          cat > local.properties << EOF
+          storeFile=app/app.key
+          storePassword=android123
+          keyAlias=rikkahub-root-release
+          keyPassword=android123
+          EOF
+
+          if [ ! -f app/google-services.json ]; then
+            echo '{"project_info":{"project_id":"placeholder"},"client":[],"configuration_version":"1"}' > app/google-services.json
+          fi
+
+      - name: Build Release APK
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleRelease
+
+      - name: Upload Release APK
+        uses: actions/upload-artifact@v4
+        with:
+          path: app/build/outputs/apk/release/*.apk
+          name: rikkahub-root-release-apk
+          retention-days: 14
+
+      - name: Publish prerelease
+        uses: softprops/action-gh-release@v2
+        if: success()
+        with:
+          tag_name: latest-root
+          name: RikkaHub Root Latest
+          prerelease: true
+          body: |
+            RikkaHub Root 二改 Release (commit `${{ github.sha }}`)
+          files: app/build/outputs/apk/release/*.apk
