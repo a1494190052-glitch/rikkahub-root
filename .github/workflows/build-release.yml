@@ -50,7 +50,7 @@ jobs:
       - name: Generate signing keystore and config
         run: |
           keytool -genkeypair -v \
-            -keystore app/app.key \
+            -keystore app.key \
             -keyalg RSA -keysize 2048 -validity 10000 \
             -alias rikkahub-root-release \
             -storepass android123 -keypass android123 \
