@@ -57,7 +57,7 @@ jobs:
             -dname "CN=RikkaHub Root, OU=Dev, O=RikkaHub, L=Beijing, ST=Beijing, C=CN"
 
           cat > local.properties << EOF
-          storeFile=app/app.key
+          storeFile=../app.key
           storePassword=android123
           keyAlias=rikkahub-root-release
           keyPassword=android123
