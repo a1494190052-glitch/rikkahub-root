@@ -57,8 +57,8 @@ data class Conversation(
     }
 
     fun updateCurrentMessages(messages: List<UIMessage>): Conversation {
-        // revert: 流式渲染优化导致发消息无回复，回退到无条件复制
-        // （此前 H2 优化曾因 r253 发消息无回复问题被回退，本次采用"内容变了才重建"
+        // 2026-07-31 诊断版：H2 节点级复制暂时回退到原版（无条件复制），
+        // 排查 r253 发消息无回复问题；确认根因后再恢复优化。
         val newNodes = this.messageNodes.toMutableList()
 
         messages.forEachIndexed { index, message ->
@@ -72,8 +72,6 @@ data class Conversation(
             } else {
                 newMessages.add(message)
                 newMessageIndex = newMessages.lastIndex
-            }
-
             }
 
             val newNode = node.copy(
