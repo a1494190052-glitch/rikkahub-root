@@ -51,6 +51,9 @@ import me.rerere.common.android.Logging
 import me.rerere.rikkahub.AppScope
 import me.rerere.rikkahub.R
 import me.rerere.rikkahub.data.ai.GenerationChunk
+import me.rerere.rikkahub.acp.AcpAgentProfile
+import me.rerere.rikkahub.acp.AcpAgentProfilesStore
+import me.rerere.rikkahub.acp.AcpRuntime
 import me.rerere.rikkahub.data.ai.GenerationHandler
 import me.rerere.rikkahub.data.ai.mcp.McpManager
 import me.rerere.rikkahub.data.ai.subagent.SubagentHost
@@ -111,6 +114,7 @@ import java.util.concurrent.ConcurrentHashMap
 import kotlin.uuid.Uuid
 
 private const val TAG = "ChatService"
+private const val ACP_MODEL_PREFIX = "acp:"
 private const val MAX_ERRORS = 50
 
 internal fun backgroundTextGenerationParams(
@@ -179,6 +183,8 @@ class ChatService(
     // ---- 子代理系统 (kimi-code) ----
     private val subagentHost: SubagentHost,
     private val json: Json,
+    private val acpRuntime: AcpRuntime,
+    private val acpAgentProfilesStore: AcpAgentProfilesStore,
 ) {
     /** 子代理编排器（kimi-code 子代理系统）：从本类抽出的 C 簇职责，零 sessions 访问 */
     private val subagentOrchestrator: SubagentOrchestrator by lazy {
@@ -415,6 +421,17 @@ class ChatService(
     // ---- 工具审批 ----
 
     fun handleToolApproval(conversationId: Uuid, toolCallId: String, approved: Boolean, reason: String = "", answer: String? = null) {
+        // ACP：审批不取消正在等待的 runTurn 协程，而是直接回应挂起的权限请求
+        if (acpRuntime.isPendingPermission(toolCallId)) {
+            appScope.launch {
+                try {
+                    acpRuntime.respondPermission(toolCallId, approved, reason, answer)
+                } catch (e: Exception) {
+                    addError(e, conversationId, title = context.getString(R.string.error_title_tool_approval))
+                }
+            }
+            return
+        }
         val session = getOrCreateSession(conversationId)
         session.getJob()?.cancel()
         val job = appScope.launch {
@@ -446,6 +463,13 @@ class ChatService(
         val assistant = settings.getAssistantById(initialConversation.assistantId) ?: settings.getCurrentAssistant()
         val model = settings.findModelById(assistant.chatModelId ?: settings.chatModelId) ?: return
         val senderName = if (assistant.useAssistantAvatar) assistant.name.ifEmpty { context.getString(R.string.assistant_page_default_assistant) } else model.displayName
+
+        // ---- ACP agent 后端分流：modelId 以 "acp:" 前缀标记为外部 agent ----
+        val acpProfile = resolveAcpProfile(model)
+        if (acpProfile != null) {
+            handleAcpComplete(conversationId, acpProfile, messageRange)
+            return
+        }
 
         runCatching {
             updateConversation(conversationId, initialConversation.copy(chatSuggestions = emptyList()))
@@ -598,7 +622,64 @@ class ChatService(
     fun clearTranslationField(conversationId: Uuid, messageId: Uuid) =
         conversationAssistant.clearTranslationField(conversationId, messageId)
 
+
+    /** modelId 以 "acp:" 前缀标记为外部 ACP agent，后缀即 profile id。 */
+    private fun resolveAcpProfile(model: Model): AcpAgentProfile? {
+        val modelId = model.modelId
+        if (!modelId.startsWith(ACP_MODEL_PREFIX)) return null
+        return acpAgentProfilesStore.get(modelId.removePrefix(ACP_MODEL_PREFIX))
+    }
+
+    /** ACP agent 后端的一轮生成：spawn agent、流式回填时间线、等审批。 */
+    private suspend fun handleAcpComplete(
+        conversationId: Uuid,
+        profile: AcpAgentProfile,
+        messageRange: ClosedRange<Int>? = null,
+    ) {
+        val conversation = getConversationFlow(conversationId).value
+        val messages = conversation.currentMessages.let {
+            if (messageRange != null) it.subList(messageRange.start, messageRange.endInclusive + 1) else it
+        }
+        val userPrompt = messages.lastOrNull { it.role == MessageRole.USER }
+            ?.parts?.filterIsInstance<UIMessagePart.Text>()
+            ?.joinToString("") { it.text }.orEmpty()
+        if (userPrompt.isBlank()) return
+        val senderName = profile.name
+
+        runCatching {
+            updateConversation(conversationId, conversation.copy(chatSuggestions = emptyList()))
+            acpRuntime.runTurn(
+                conversationId = conversationId.toString(),
+                profile = profile,
+                baseMessages = messages,
+                userPrompt = userPrompt,
+            ) { chunk ->
+                when (chunk) {
+                    is GenerationChunk.Messages -> {
+                        val updated = getConversationFlow(conversationId).value
+                            .updateCurrentMessages(chunk.messages)
+                        updateConversation(conversationId, updated)
+                        chunk.messages.lastOrNull()?.let { last ->
+                            appEventBus.tryEmit(AppEvent.ChatGenerationUpdate(conversationId, last, senderName))
+                        }
+                    }
+                }
+            }
+        }.onFailure { error ->
+            error.printStackTrace()
+            appEventBus.tryEmit(AppEvent.ChatGenerationEnded(conversationId, senderName, null))
+            addError(error, conversationId, title = context.getString(R.string.error_title_generation))
+        }.onSuccess {
+            val finalConversation = getConversationFlow(conversationId).value
+            saveConversation(conversationId, finalConversation)
+            val preview = finalConversation.currentMessages.lastOrNull()?.toText()?.take(50)?.trim() ?: ""
+            appEventBus.tryEmit(AppEvent.ChatGenerationEnded(conversationId, senderName, preview))
+            launchWithConversationReference(conversationId) { generateTitle(conversationId, finalConversation) }
+        }
+    }
+
     suspend fun stopGeneration(conversationId: Uuid) {
+        acpRuntime.interrupt(conversationId.toString())
         val job = sessionManager.getSessionJob(conversationId) ?: return
         job.cancel()
         runCatching { job.join() }

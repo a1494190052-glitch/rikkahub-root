@@ -13,6 +13,7 @@ import me.rerere.rikkahub.utils.EmojiUtils
 import me.rerere.rikkahub.utils.JsonInstant
 import me.rerere.rikkahub.utils.SoundEffectPlayer
 import me.rerere.rikkahub.utils.UpdateChecker
+import kotlinx.coroutines.flow.first
 import me.rerere.rikkahub.mcp.McpServerManager
 import me.rerere.rikkahub.web.WebServerManager
 import me.rerere.tts.provider.TTSManager
@@ -121,6 +122,8 @@ val appModule = module {
             shellAuditLogger = get(),
             subagentHost = get(),
             json = get(),
+            acpRuntime = get(),
+            acpAgentProfilesStore = get(),
         )
     }
 
@@ -130,5 +133,29 @@ val appModule = module {
 
     single {
         McpServerManager(context = get(), appScope = get(), localTools = get())
+    }
+
+    // ---- ACP agent (外部 agent 后端) ----
+    single { me.rerere.rikkahub.acp.AcpAgentProfilesStore(context = get(), json = get()) }
+
+    single {
+        me.rerere.rikkahub.acp.AcpProcessFactory(
+            context = get(),
+            workspaceRootProvider = {
+                get<me.rerere.rikkahub.data.repository.WorkspaceRepository>()
+                    .listFlow().first()
+                    .firstOrNull { it.shellStatus == me.rerere.workspace.WorkspaceShellStatus.READY.name }
+                    ?.root
+            },
+        )
+    }
+
+    single {
+        me.rerere.rikkahub.acp.AcpRuntime(
+            scope = get(),
+            processBuilderFactory = { profile ->
+                get<me.rerere.rikkahub.acp.AcpProcessFactory>().build(profile)
+            },
+        )
     }
 }
