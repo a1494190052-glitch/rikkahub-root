@@ -68,7 +68,7 @@ class AcpAgentProfilesStore(
     }
 
     companion object {
-        /** 内置默认：OpenAI Codex CLI（npm 全局安装后可直接 codex 启动）。 */
+        /** 内置默认：Codex + DeepSeek Harness（工作区 /workspace/acp 已配好 cordis.yml + omnibot 插件）。 */
         val DEFAULT_PROFILES = listOf(
             AcpAgentProfile(
                 id = "codex",
@@ -76,6 +76,13 @@ class AcpAgentProfilesStore(
                 command = "codex",
                 arguments = emptyList(),
                 cwd = "/workspace",
+            ),
+            AcpAgentProfile(
+                id = "dsh",
+                name = "DeepSeek Harness",
+                command = "dsh-acp-demo",
+                arguments = listOf("--config", "cordis.yml"),
+                cwd = "/workspace/acp",
             ),
         )
     }
