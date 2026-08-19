@@ -298,6 +298,7 @@ private fun ChatPageContent(
         }
     }
     val assistant = setting.getCurrentAssistant()
+    val activeAcpProfileId = vm.acpModes.collectAsStateWithLifecycle().value[vm.conversationId]
     var showFilesSheet by remember { mutableStateOf(false) }
 
     val completionProviders = remember(assistant.workspaceId, conversation.workspaceCwd, workspaceRepository) {
@@ -365,7 +366,7 @@ private fun ChatPageContent(
                         )
                     },
                     onSendClick = {
-                        if (currentChatModel == null) {
+                        if (currentChatModel == null && activeAcpProfileId == null) {
                             toaster.show("请先选择模型", type = ToastType.Error)
                             return@ChatInput
                         }
@@ -399,6 +400,9 @@ private fun ChatPageContent(
                     onUpdateChatModel = {
                         vm.setChatModel(assistant = setting.getCurrentAssistant(), model = it)
                     },
+                    acpProfiles = vm.acpProfiles.collectAsStateWithLifecycle().value,
+                    activeAcpProfileId = activeAcpProfileId,
+                    onToggleAcp = { vm.setAcpMode(it) },
                     onUpdateAssistant = {
                         vm.updateSettings(
                             setting.copy(

@@ -41,8 +41,10 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.input.TextFieldLineLimits
 import androidx.compose.material3.BasicAlertDialog
 import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -85,12 +87,14 @@ import me.rerere.ai.provider.ModelAbility
 import me.rerere.ai.provider.ModelType
 import me.rerere.asr.ASRStatus
 import me.rerere.hugeicons.HugeIcons
+import me.rerere.hugeicons.stroke.Bot
 import me.rerere.hugeicons.stroke.Add01
 import me.rerere.hugeicons.stroke.ArrowUp02
 import me.rerere.hugeicons.stroke.Cancel01
 import me.rerere.hugeicons.stroke.FullScreen
 import me.rerere.hugeicons.stroke.Zap
 import me.rerere.rikkahub.R
+import me.rerere.rikkahub.acp.AcpAgentProfile
 import me.rerere.rikkahub.data.datastore.Settings
 import me.rerere.rikkahub.data.datastore.getCurrentAssistant
 import me.rerere.rikkahub.data.datastore.getCurrentChatModel
@@ -132,6 +136,9 @@ fun ChatInput(
     onCancelClick: () -> Unit,
     onSendClick: () -> Unit,
     onLongSendClick: () -> Unit,
+    acpProfiles: List<AcpAgentProfile> = emptyList(),
+    activeAcpProfileId: String? = null,
+    onToggleAcp: (String?) -> Unit = {},
 ) {
     val toaster = LocalToaster.current
     val assistant = settings.getCurrentAssistant()
@@ -266,6 +273,15 @@ fun ChatInput(
                                 onlyIcon = true,
                                 modifier = Modifier,
                             )
+
+                            // ACP Agent 切换（外部 agent 后端）
+                            if (acpProfiles.isNotEmpty()) {
+                                AcpAgentToggle(
+                                    profiles = acpProfiles,
+                                    activeProfileId = activeAcpProfileId,
+                                    onToggle = onToggleAcp,
+                                )
+                            }
 
                             // Search
                             val enableSearchMsg = stringResource(R.string.web_search_enabled)
@@ -843,6 +859,58 @@ private fun FullScreenEditor(
                         ),
                     )
                 }
+            }
+        }
+    }
+}
+
+
+/** 聊天输入区旁的 ACP agent 切换按钮：列出可用 profile，点击切换/关闭。 */
+@Composable
+private fun AcpAgentToggle(
+    profiles: List<AcpAgentProfile>,
+    activeProfileId: String?,
+    onToggle: (String?) -> Unit,
+) {
+    var menuOpen by remember { mutableStateOf(false) }
+    val active = profiles.firstOrNull { it.id == activeProfileId }
+    Box {
+        IconButton(
+            onClick = { menuOpen = true },
+            modifier = Modifier.size(32.dp),
+        ) {
+            Icon(
+                imageVector = HugeIcons.Bot,
+                contentDescription = "ACP Agent",
+                tint = if (active != null) MaterialTheme.colorScheme.primary else LocalContentColor.current,
+            )
+        }
+        DropdownMenu(
+            expanded = menuOpen,
+            onDismissRequest = { menuOpen = false },
+        ) {
+            if (profiles.isEmpty()) {
+                DropdownMenuItem(text = { Text("无 ACP agent") }, onClick = { menuOpen = false })
+            }
+            profiles.forEach { profile ->
+                DropdownMenuItem(
+                    text = {
+                        Text(if (profile.id == activeProfileId) "✓ ACP: ${profile.name}" else "ACP: ${profile.name}")
+                    },
+                    onClick = {
+                        menuOpen = false
+                        onToggle(if (profile.id == activeProfileId) null else profile.id)
+                    },
+                )
+            }
+            if (activeProfileId != null) {
+                DropdownMenuItem(
+                    text = { Text("关闭 ACP") },
+                    onClick = {
+                        menuOpen = false
+                        onToggle(null)
+                    },
+                )
             }
         }
     }

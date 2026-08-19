@@ -37,6 +37,7 @@ import me.rerere.rikkahub.data.model.NodeFavoriteTarget
 import me.rerere.rikkahub.data.repository.ConversationRepository
 import me.rerere.rikkahub.data.repository.FavoriteRepository
 import me.rerere.rikkahub.service.ChatError
+import me.rerere.rikkahub.acp.AcpAgentProfile
 import me.rerere.rikkahub.service.ChatService
 import me.rerere.rikkahub.ui.hooks.writeStringPreference
 import me.rerere.rikkahub.ui.hooks.ChatInputState
@@ -113,6 +114,12 @@ class ChatVM(
 
     // 错误状态
     val errors: StateFlow<List<ChatError>> = chatService.errors
+
+    val conversationId: Uuid get() = _conversationId
+    val acpProfiles: StateFlow<List<AcpAgentProfile>> = chatService.acpProfiles
+    val acpModes: StateFlow<Map<Uuid, String>> = chatService.acpModes
+
+    fun setAcpMode(profileId: String?) = chatService.setAcpMode(_conversationId, profileId)
 
     fun dismissError(id: Uuid) = chatService.dismissError(id)
 

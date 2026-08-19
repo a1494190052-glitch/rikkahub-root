@@ -247,6 +247,17 @@ class ChatService(
     }
 
     private val _errors = MutableStateFlow<List<ChatError>>(emptyList())
+
+    // ---- ACP agent 对话级覆盖：conversationId -> profileId（聊天页按钮切换） ----
+    private val _acpModes = MutableStateFlow<Map<Uuid, String>>(emptyMap())
+    val acpModes: StateFlow<Map<Uuid, String>> = _acpModes.asStateFlow()
+    val acpProfiles: StateFlow<List<AcpAgentProfile>> = acpAgentProfilesStore.profiles
+
+    fun setAcpMode(conversationId: Uuid, profileId: String?) {
+        _acpModes.update { current ->
+            if (profileId == null) current - conversationId else current + (conversationId to profileId)
+        }
+    }
     val errors: StateFlow<List<ChatError>> = _errors.asStateFlow()
 
     fun addError(
@@ -461,10 +472,18 @@ class ChatService(
         val settings = settingsStore.settingsFlow.first()
         val initialConversation = getConversationFlow(conversationId).value
         val assistant = settings.getAssistantById(initialConversation.assistantId) ?: settings.getCurrentAssistant()
+
+        // ---- ACP agent 后端分流 ----
+        // 1) 对话级 ACP 覆盖（聊天页按钮切换，无需选模型）
+        acpModes.value[conversationId]?.let { profileId ->
+            acpAgentProfilesStore.get(profileId)?.let { profile ->
+                handleAcpComplete(conversationId, profile, messageRange)
+                return
+            }
+        }
+        // 2) 模型级标记：modelId 以 "acp:" 前缀
         val model = settings.findModelById(assistant.chatModelId ?: settings.chatModelId) ?: return
         val senderName = if (assistant.useAssistantAvatar) assistant.name.ifEmpty { context.getString(R.string.assistant_page_default_assistant) } else model.displayName
-
-        // ---- ACP agent 后端分流：modelId 以 "acp:" 前缀标记为外部 agent ----
         val acpProfile = resolveAcpProfile(model)
         if (acpProfile != null) {
             handleAcpComplete(conversationId, acpProfile, messageRange)
