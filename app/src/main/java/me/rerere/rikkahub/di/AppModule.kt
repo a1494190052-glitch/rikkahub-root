@@ -152,7 +152,7 @@ val appModule = module {
 
     single {
         me.rerere.rikkahub.acp.AcpRuntime(
-            scope = get(),
+            scope = get<AppScope>(),
             processBuilderFactory = { profile ->
                 get<me.rerere.rikkahub.acp.AcpProcessFactory>().build(profile)
             },
