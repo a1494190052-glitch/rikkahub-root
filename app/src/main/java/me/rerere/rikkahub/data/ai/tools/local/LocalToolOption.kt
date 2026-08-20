@@ -102,4 +102,10 @@ sealed class LocalToolOption {
     @Serializable
     @SerialName("scan_media")
     data object ScanMedia : LocalToolOption()
+
+    // ===== OpenMinis 移植 =====
+
+    @Serializable
+    @SerialName("browser_use")
+    data object BrowserUse : LocalToolOption()
 }

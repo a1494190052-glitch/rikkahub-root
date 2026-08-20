@@ -212,10 +212,18 @@ class PluginManager(
 
     /**
      * Get all plugin tools (waits for initialization).
+     *
+     * Results are cached: rebuilding every PluginToolProvider on each call
+     * (per generation start) wasted Default threads via LocalTools'
+     * runBlocking wrapper. Invalidated on plugin add/remove/toggle/config.
      */
+    @Volatile
+    private var cachedTools: List<me.rerere.ai.core.Tool>? = null
+
     suspend fun getTools(): List<me.rerere.ai.core.Tool> {
         _initialized.await()
-        return loader.getLoadedPluginIds().flatMap { pluginId ->
+        cachedTools?.let { return it }
+        val tools = loader.getLoadedPluginIds().flatMap { pluginId ->
             val plugin = loader.getLoadedPlugin(pluginId) ?: return@flatMap emptyList()
             plugin.manifest.tools.map { toolDef ->
                 me.rerere.rikkahub.plugin.provider.PluginToolProvider.createTool(
@@ -225,6 +233,8 @@ class PluginManager(
                 )
             }
         }
+        cachedTools = tools
+        return tools
     }
 
     /**
@@ -248,6 +258,8 @@ class PluginManager(
      * Refresh the plugin info list from current state.
      */
     private fun refreshPluginList() {
+        // Plugin list changed (toggle/import/delete/config) -> tools cache invalid
+        cachedTools = null
         val disabled = disabledPluginIds
         val pluginInfos = manifests.map { (id, entry) ->
             val (_, manifest) = entry

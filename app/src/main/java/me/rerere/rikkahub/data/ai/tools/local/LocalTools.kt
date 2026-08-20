@@ -17,6 +17,8 @@ import me.rerere.rikkahub.data.ai.tools.createGetVolumeTool
 import me.rerere.rikkahub.data.ai.tools.createSetVolumeTool
 import me.rerere.rikkahub.data.ai.tools.createWakeScreenTool
 import me.rerere.rikkahub.data.ai.tools.createWifiInfoTool
+import me.rerere.rikkahub.browser.BrowserTabPool
+import me.rerere.rikkahub.browser.createBrowserUseTool
 import me.rerere.rikkahub.data.datastore.SettingsStore
 import me.rerere.rikkahub.data.event.AppEventBus
 import me.rerere.tts.provider.TTSManager
@@ -31,6 +33,7 @@ class LocalTools(
     private val ptySessionManager: me.rerere.rikkahub.service.shell.PtySessionManager? = null,
     private val mcpManager: me.rerere.rikkahub.data.ai.mcp.McpManager? = null,
     private val pluginManager: me.rerere.rikkahub.plugin.manager.PluginManager? = null,
+    private val browserTabPool: me.rerere.rikkahub.browser.BrowserTabPool? = null,
     private val isSubAgent: Boolean = false,
 ) {
     val javascriptTool by lazy { buildJavascriptTool() }
@@ -69,6 +72,7 @@ class LocalTools(
     val notificationPostTool by lazy { createNotificationPostTool(context) }
     val shareTool by lazy { createShareTool(context) }
     val mediaScannerTool by lazy { createMediaScannerTool(context) }
+    val browserUseTool by lazy { browserTabPool?.let { createBrowserUseTool(it) } }
 
     fun forSubAgent(): LocalTools =
         LocalTools(context, eventBus, ttsManager, settingsStore, null, shellAuditLogger, null, null, null, isSubAgent = true)
@@ -103,6 +107,7 @@ class LocalTools(
         if (options.contains(LocalToolOption.PostNotification)) tools.add(notificationPostTool)
         if (options.contains(LocalToolOption.Share)) tools.add(shareTool)
         if (options.contains(LocalToolOption.ScanMedia)) tools.add(mediaScannerTool)
+        if (options.contains(LocalToolOption.BrowserUse)) browserUseTool?.let { tools.add(it) }
 
         // Plugin tools: merge tools from loaded plugins
         if (!isSubAgent && pluginManager != null) {

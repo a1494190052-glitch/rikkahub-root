@@ -150,7 +150,8 @@ class SessionManager(
     }
 
     private fun checkFilesDelete(newConversation: Conversation, oldConversation: Conversation) {
-        val deletedFiles = oldConversation.files.filter { file -> newConversation.files.none { it == file } }
+        val newSet = newConversation.files.toSet()
+        val deletedFiles = oldConversation.files.filterNot { it in newSet }
         if (deletedFiles.isNotEmpty()) { filesManager.deleteChatFiles(deletedFiles); Log.w(TAG, "checkFilesDelete: $deletedFiles") }
     }
 

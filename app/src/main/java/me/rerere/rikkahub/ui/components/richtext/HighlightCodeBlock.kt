@@ -2,6 +2,7 @@ package me.rerere.rikkahub.ui.components.richtext
 
 import android.content.ClipData
 import android.net.Uri
+import android.view.MotionEvent
 import androidx.activity.compose.ManagedActivityResultLauncher
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -21,14 +22,16 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -40,6 +43,7 @@ import androidx.compose.ui.platform.ClipEntry
 import androidx.compose.ui.platform.Clipboard
 import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextStyle
@@ -50,9 +54,12 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.runBlocking
 import kotlinx.datetime.TimeZone
 import kotlinx.datetime.toLocalDateTime
 import me.rerere.highlight.HighlightText
@@ -105,11 +112,14 @@ fun HighlightCodeBlock(
     val scope = rememberCoroutineScope()
     val navController = LocalNavController.current
     val context = LocalContext.current
-    val settings = LocalSettings.current
+    val settings = LocalSettings.current.settings
     val normalizedLanguage = remember(language) { language.lowercase() }
     val canInlinePreview = completeCodeBlock && normalizedLanguage in PREVIEWABLE_LANGUAGES
+    // 默认关闭内联 WebView 预览：长对话里多个 html/svg 代码块会叠多个 WebView，
+    // LazyColumn 滚动时反复创建/销毁是掉帧主源。默认先渲染为高亮代码（快），
+    // 需要看渲染效果的可以点代码块标题栏的"预览"图标手动切换。
     var previewMode by remember(canInlinePreview, code, normalizedLanguage) {
-        mutableStateOf(canInlinePreview)
+        mutableStateOf(false)
     }
 
     var isExpanded by remember(settings.displaySetting.codeBlockAutoCollapse) {
@@ -262,9 +272,9 @@ private fun CodeBlockWithLineNumbersWrapped(
     val lineNumberWidth = remember(displayLines.size) {
         displayLines.size.toString().length
     }
-    SelectionContainer {
-        Column {
-            displayLines.forEachIndexed { index, line ->
+    // 不用 SelectionContainer：可选择文本慢路径在 LazyColumn 滚动时每帧命中测试，长代码块掉帧严重
+    Column {
+        displayLines.forEachIndexed { index, line ->
                 Row(
                     modifier = Modifier.fillMaxWidth()
                 ) {
@@ -291,7 +301,6 @@ private fun CodeBlockWithLineNumbersWrapped(
                 }
             }
         }
-    }
 }
 
 @Composable
@@ -335,20 +344,18 @@ private fun CodeBlockDefault(
             }
         }
 
-        // 代码列
-        SelectionContainer {
-            HighlightText(
-                code = displayCode,
-                language = language,
-                modifier = Modifier.animateContentSize(),
-                fontSize = textStyle.fontSize,
-                lineHeight = textStyle.lineHeight,
-                colors = colorPalette,
-                overflow = TextOverflow.Visible,
-                softWrap = autoWrap,
-                fontFamily = JetbrainsMono
-            )
-        }
+        // 代码列（不用 SelectionContainer，避免可选择文本慢路径拖慢滚动）
+        HighlightText(
+            code = displayCode,
+            language = language,
+            modifier = Modifier.animateContentSize(),
+            fontSize = textStyle.fontSize,
+            lineHeight = textStyle.lineHeight,
+            colors = colorPalette,
+            overflow = TextOverflow.Visible,
+            softWrap = autoWrap,
+            fontFamily = JetbrainsMono
+        )
     }
 }
 
@@ -486,14 +493,15 @@ private fun CodeBlockPreview(
         settings = {
             builtInZoomControls = true
             displayZoomControls = false
-            useWideViewPort = true
-            loadWithOverviewMode = true
+            useWideViewPort = false
+            loadWithOverviewMode = false
         }
     )
 
     WebView(
         state = state,
         modifier = modifier.clip(RoundedCornerShape(4.dp)),
+        useNestedScroll = true,
     )
 }
 
@@ -508,31 +516,53 @@ private fun buildCodePreviewHtml(code: String, language: String): String {
 class HighlightCodeVisualTransformation(
     val language: String,
     val highlighter: Highlighter,
-    val darkMode: Boolean
+    val darkMode: Boolean,
 ) : VisualTransformation {
+
+    /**
+     * 高亮完成信号：异步分词结果入缓存后自增。
+     * 调用点在组合中读取它，使异步结果能触发重组刷新显示。
+     */
+    val version = mutableIntStateOf(0)
+
+    // text+language+darkMode -> 高亮结果，简单 LRU（超限清空）
+    private val cache = object : LinkedHashMap<String, AnnotatedString>(128, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, AnnotatedString>?) = size > 128
+    }
+    private val pendingKeys = java.util.Collections.newSetFromMap(ConcurrentHashMap<String, Boolean>())
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+
     override fun filter(text: AnnotatedString): TransformedText {
-        val annotatedString = try {
-            val colorPalette = if (darkMode) AtomOneDarkPalette else AtomOneLightPalette
-            if (text.text.isEmpty()) {
-                AnnotatedString("")
-            } else {
-                runBlocking {
+        if (text.text.isEmpty()) {
+            return TransformedText(AnnotatedString(""), OffsetMapping.Identity)
+        }
+        val key = language + '|' + darkMode + '|' + text.text.length + '|' + text.text.hashCode()
+        synchronized(cache) {
+            cache[key]?.let { return TransformedText(it, OffsetMapping.Identity) }
+        }
+        // 未命中：后台分词（QuickJS 在 Default 线程），不阻塞主线程
+        if (pendingKeys.add(key)) {
+            val palette = if (darkMode) AtomOneDarkPalette else AtomOneLightPalette
+            scope.launch {
+                val annotated = try {
                     val tokens = highlighter.highlight(text.text, language)
                     buildAnnotatedString {
                         tokens.forEach { token ->
-                            buildHighlightText(token, colorPalette)
+                            buildHighlightText(token, palette)
                         }
                     }
+                } catch (e: Exception) {
+                    AnnotatedString(text.text)
                 }
+                synchronized(cache) {
+                    cache[key] = annotated
+                }
+                pendingKeys.remove(key)
+                version.intValue++
             }
-        } catch (e: Exception) {
-            AnnotatedString(text.text)
         }
-
-        return TransformedText(
-            text = annotatedString,
-            offsetMapping = OffsetMapping.Identity
-        )
+        // 返回未高亮原文，异步结果就绪后由 version 触发重组刷新
+        return TransformedText(AnnotatedString(text.text), OffsetMapping.Identity)
     }
 
     companion object {

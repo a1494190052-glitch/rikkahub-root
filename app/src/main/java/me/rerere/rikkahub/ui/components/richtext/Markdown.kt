@@ -96,6 +96,7 @@ import me.rerere.hugeicons.stroke.Tick01
 import me.rerere.rikkahub.data.datastore.Settings
 import me.rerere.rikkahub.ui.components.table.DataTable
 import me.rerere.rikkahub.ui.context.LocalSettings
+import me.rerere.rikkahub.ui.context.SettingsRef
 import me.rerere.rikkahub.ui.modifier.onClick
 import me.rerere.rikkahub.ui.theme.JetbrainsMono
 import me.rerere.rikkahub.utils.toDp
@@ -168,7 +169,7 @@ private fun preProcess(content: String): String {
 @Composable
 private fun MarkdownPreview() {
     MaterialTheme {
-        CompositionLocalProvider(LocalSettings provides Settings()) {
+        CompositionLocalProvider(LocalSettings provides SettingsRef(Settings())) {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -365,7 +366,7 @@ private fun MarkdownNode(
         MarkdownElementTypes.ATX_1, MarkdownElementTypes.ATX_2, MarkdownElementTypes.ATX_3, MarkdownElementTypes.ATX_4, MarkdownElementTypes.ATX_5, MarkdownElementTypes.ATX_6 -> {
             val style = HeaderStyle.fromMarkdownType(
                 type = node.type,
-                fontSizeRatio = LocalSettings.current.displaySetting.fontSizeRatio,
+                fontSizeRatio = LocalSettings.current.settings.displaySetting.fontSizeRatio,
             )
             val headingPadding = HeaderStyle.verticalPadding(node.type)
             ProvideTextStyle(value = LocalTextStyle.current.merge(style)) {
@@ -537,7 +538,7 @@ private fun MarkdownNode(
 
         GFMElementTypes.INLINE_MATH -> {
             val formula = node.getTextInNode(content)
-            val enableLatexRendering = LocalSettings.current.displaySetting.enableLatexRendering
+            val enableLatexRendering = LocalSettings.current.settings.displaySetting.enableLatexRendering
             if (enableLatexRendering) {
                 MathInline(
                     formula, modifier = modifier.padding(horizontal = 1.dp),
@@ -554,7 +555,7 @@ private fun MarkdownNode(
 
         GFMElementTypes.BLOCK_MATH -> {
             val formula = node.getTextInNode(content)
-            val enableLatexRendering = LocalSettings.current.displaySetting.enableLatexRendering
+            val enableLatexRendering = LocalSettings.current.settings.displaySetting.enableLatexRendering
             if (enableLatexRendering) {
                 MathBlock(
                     formula, modifier = modifier
@@ -786,7 +787,7 @@ private fun Paragraph(
     val hasInlineMath = remember(node) {
         node.findChildOfTypeRecursive(GFMElementTypes.INLINE_MATH) != null
     }
-    val enableLatexRendering = LocalSettings.current.displaySetting.enableLatexRendering
+    val enableLatexRendering = LocalSettings.current.settings.displaySetting.enableLatexRendering
 
     val textStyle = LocalTextStyle.current
     val density = LocalDensity.current

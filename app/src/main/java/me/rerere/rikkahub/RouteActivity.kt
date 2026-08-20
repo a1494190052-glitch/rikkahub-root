@@ -73,6 +73,7 @@ import me.rerere.rikkahub.ui.context.LocalASRState
 import me.rerere.rikkahub.ui.context.LocalNavController
 import me.rerere.rikkahub.ui.context.LocalSettings
 import me.rerere.rikkahub.ui.context.LocalSharedTransitionScope
+import me.rerere.rikkahub.ui.context.SettingsRef
 import me.rerere.rikkahub.ui.context.LocalTTSState
 import me.rerere.rikkahub.ui.context.LocalToaster
 import me.rerere.rikkahub.ui.context.Navigator
@@ -85,6 +86,7 @@ import me.rerere.rikkahub.ui.pages.assistant.detail.AssistantBasicPage
 import me.rerere.rikkahub.ui.pages.assistant.detail.AssistantDetailPage
 import me.rerere.rikkahub.ui.pages.assistant.detail.AssistantExtensionsPage
 import me.rerere.rikkahub.ui.pages.assistant.detail.AssistantLocalToolPage
+import me.rerere.rikkahub.ui.pages.assistant.detail.AssistantSubagentPage
 import me.rerere.rikkahub.ui.pages.assistant.detail.AssistantMcpPage
 import me.rerere.rikkahub.ui.pages.assistant.detail.AssistantMemoryPage
 import me.rerere.rikkahub.ui.pages.assistant.detail.AssistantPromptPage
@@ -127,6 +129,7 @@ import me.rerere.rikkahub.ui.pages.setting.SettingSearchDetailPage
 import me.rerere.rikkahub.ui.pages.setting.SettingSearchPage
 import me.rerere.rikkahub.ui.pages.setting.SettingSpeechPage
 import me.rerere.rikkahub.ui.pages.setting.SettingWebPage
+import me.rerere.rikkahub.ui.pages.setting.SettingMcpServerPage
 import me.rerere.rikkahub.ui.pages.share.handler.ShareHandlerPage
 import me.rerere.rikkahub.ui.pages.stats.StatsPage
 import me.rerere.rikkahub.ui.pages.translator.TranslatorPage
@@ -251,6 +254,8 @@ class RouteActivity : ComponentActivity() {
     fun AppRoutes() {
         val toastState = rememberToasterState()
         val settings by settingsStore.settingsFlow.collectAsStateWithLifecycle()
+        // 稳定引用：settings 实例不变则 ref 不变 → CompositionLocalMap 比较退化为引用比较 O(1)
+        val settingsRef = remember(settings) { SettingsRef(settings) }
         val tts = rememberCustomTtsState()
         val asr = rememberCustomAsrState()
         val eventBus = koinInject<AppEventBus>()
@@ -287,7 +292,7 @@ class RouteActivity : ComponentActivity() {
             CompositionLocalProvider(
                 LocalNavController provides Navigator(backStack),
                 LocalSharedTransitionScope provides this,
-                LocalSettings provides settings,
+                LocalSettings provides settingsRef,
                 LocalHighlighter provides highlighter,
                 LocalToaster provides toastState,
                 LocalTTSState provides tts,
@@ -390,6 +395,10 @@ class RouteActivity : ComponentActivity() {
                                 AssistantLocalToolPage(key.id)
                             }
 
+                            entry<Screen.AssistantSubagent> { key ->
+                                AssistantSubagentPage(key.id)
+                            }
+
                             entry<Screen.AssistantInjections> { key ->
                                 AssistantExtensionsPage(key.id)
                             }
@@ -482,6 +491,10 @@ class RouteActivity : ComponentActivity() {
 
                             entry<Screen.SettingWeb> {
                                 SettingWebPage()
+                            }
+
+                            entry<Screen.SettingMcpServer> {
+                                SettingMcpServerPage()
                             }
 
                             entry<Screen.Debug> {
@@ -629,6 +642,9 @@ sealed interface Screen : NavKey {
     data class AssistantLocalTool(val id: String) : Screen
 
     @Serializable
+    data class AssistantSubagent(val id: String) : Screen
+
+    @Serializable
     data class AssistantInjections(val id: String) : Screen
 
     @Serializable
@@ -696,6 +712,9 @@ sealed interface Screen : NavKey {
 
     @Serializable
     data object SettingWeb : Screen
+
+    @Serializable
+    data object SettingMcpServer : Screen
 
     @Serializable
     data object Debug : Screen

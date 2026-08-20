@@ -139,6 +139,8 @@
   <string name="assistant_page_tab_basic">基础设定</string>
   <string name="assistant_page_tab_extensions">扩展管理</string>
   <string name="assistant_page_tab_local_tools">本地工具</string>
+  <string name="assistant_page_tab_subagent">子代理</string>
+  <string name="assistant_detail_subagent_desc">配置子代理 Profile</string>
   <string name="assistant_page_tab_mcp">MCP</string>
   <string name="assistant_page_tab_memory">记忆</string>
   <string name="assistant_page_tab_prompt">提示词</string>
@@ -1349,4 +1351,34 @@ mDNS 地址：使用 .local 主机名，同一网络中的其他设备可通过�
   <string name="shell_audit_source_scheduled">定时任务</string>
   <string name="extensions_page_shell_audit">Shell 日志</string>
   <string name="extensions_page_shell_audit_desc">审计 AI 在你设备上执行的每条 shell 命令</string>
+
+  <!-- MCP Server -->
+  <string name="notification_channel_mcp_server">MCP服务器</string>
+  <string name="notification_mcp_server_running">MCP服务器运行中</string>
+  <string name="notification_mcp_server_starting">启动中…</string>
+  <string name="notification_mcp_server_stop">停止</string>
+  <string name="setting_page_mcp_server">MCP服务器</string>
+  <string name="setting_page_mcp_server_desc">通过 Streamable HTTP 将设备工具暴露给外部 MCP 客户端</string>
+  <string name="setting_page_mcp_server_start">启动</string>
+  <string name="setting_page_mcp_server_stop">停止</string>
+  <string name="setting_page_mcp_server_port">端口</string>
+  <string name="setting_page_mcp_server_port_desc">MCP服务器监听端口 (1024-65535)</string>
+  <string name="setting_page_mcp_server_localhost_only">仅本机</string>
+  <string name="setting_page_mcp_server_localhost_only_desc">仅监听本机 (127.0.0.1)，禁用局域网与 mDNS 访问</string>
+  <string name="setting_page_mcp_server_auth_enable">启用鉴权</string>
+  <string name="setting_page_mcp_server_auth_enable_desc">调用工具需要 Bearer 令牌。暴露 root shell 时务必保持开启。</string>
+  <string name="setting_page_mcp_server_token">访问令牌</string>
+  <string name="setting_page_mcp_server_token_desc">MCP 客户端所需的 Bearer 令牌 (Authorization: Bearer &lt;token&gt;)</string>
+  <string name="setting_page_mcp_server_token_regenerate">重新生成令牌</string>
+  <string name="setting_page_mcp_server_token_regenerate_desc">生成新的随机令牌，下次启动时生效。</string>
+  <string name="setting_page_mcp_server_token_copy">复制令牌</string>
+  <string name="setting_page_mcp_server_token_copy_desc">将 Bearer 令牌复制到剪贴板</string>
+  <string name="setting_page_mcp_server_lan_address">局域网地址</string>
+  <string name="setting_page_mcp_server_mdns_address">mDNS 地址</string>
+  <string name="setting_page_mcp_server_local_address">本机地址</string>
+  <string name="setting_page_mcp_server_address_note">地址说明</string>
+  <string name="setting_page_mcp_server_address_note_desc">MCP 客户端需连接到 /mcp 路径，例如 http://地址:端口/mcp。局域网使用设备 WiFi IP（仅同一网络）；mDNS 使用 .local 主机名；本机使用 localhost（仅本机）。</string>
+  <string name="setting_page_mcp_server_approval_note">审批说明</string>
+  <string name="setting_page_mcp_server_approval_note_desc">MCP 调用会直接执行工具，绕过应用内的逐次审批界面。Bearer 令牌即授权边界：任何持有令牌者都能运行全部暴露的工具，包括 root shell。</string>
+  <string name="setting_page_mcp_server_error">错误</string>
 </resources>

@@ -35,6 +35,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -55,6 +56,7 @@ import dev.chrisbanes.haze.hazeSource
 import dev.chrisbanes.haze.rememberHazeState
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import me.rerere.ai.provider.Model
@@ -282,6 +284,19 @@ private fun ChatPageContent(
     val workspaceRepository: WorkspaceRepository = koinInject()
     var previewMode by rememberSaveable { mutableStateOf(false) }
     val hazeState = rememberHazeState()
+    // 滚动中暂停输入栏毛玻璃模糊（Haze 每帧重采样是滑动掉帧来源之一）。
+    // 滚动停止 200ms 后再恢复，避免手指轻弹导致模糊频繁闪变。
+    var listScrolling by remember { mutableStateOf(false) }
+    LaunchedEffect(chatListState) {
+        snapshotFlow { chatListState.isScrollInProgress }.collect { scrolling ->
+            if (scrolling) {
+                listScrolling = true
+            } else {
+                delay(200)
+                listScrolling = false
+            }
+        }
+    }
     val assistant = setting.getCurrentAssistant()
     var showFilesSheet by remember { mutableStateOf(false) }
 
@@ -329,6 +344,7 @@ private fun ChatPageContent(
                     loading = loadingJob != null,
                     settings = setting,
                     hazeState = hazeState,
+                    scrolling = listScrolling,
                     completionProviders = completionProviders,
                     onCancelClick = {
                         vm.stopGeneration()

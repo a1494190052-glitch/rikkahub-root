@@ -33,6 +33,8 @@ class ConversationRepository(
     private val database: AppDatabase,
     private val filesManager: FilesManager,
     private val messageFtsManager: MessageFtsManager,
+    // 内存缓存：nodeId -> 上次保存时的内容指纹。避免每次保存对未变节点全量 JSON 编码比较。
+    private val lastSavedNodeHash: java.util.concurrent.ConcurrentHashMap<String, Long> = java.util.concurrent.ConcurrentHashMap(),
 ) {
     companion object {
         private const val PAGE_SIZE = 20
@@ -499,8 +501,19 @@ class ConversationRepository(
         nodes.forEachIndexed { index, node ->
             val nodeId = node.id.toString()
             newNodeIds.add(nodeId)
-            val messagesJson = JsonInstant.encodeToString(node.messages)
             val old = existingById[nodeId]
+
+            // 快路径：节点已存在、位置/选中项未变、内容指纹与上次保存一致 → 未变化，
+            // 跳过全量 JSON 编码比较（流式场景通常只有一个节点在变）。
+            if (old != null
+                && old.nodeIndex == index
+                && old.selectIndex == node.selectIndex
+                && lastSavedNodeHash[nodeId] == node.quickHash()
+            ) {
+                return@forEachIndexed
+            }
+
+            val messagesJson = JsonInstant.encodeToString(node.messages)
 
             if (old == null
                 || old.messages != messagesJson
@@ -518,12 +531,15 @@ class ConversationRepository(
                     )
                 )
             }
+            // 更新指纹缓存（无论是否写库，指纹反映本次保存后的内容）
+            lastSavedNodeHash[nodeId] = node.quickHash()
         }
 
         // 删除已被移除的节点
         existing.forEach { entity ->
             if (entity.id !in newNodeIds) {
                 messageNodeDAO.deleteById(entity.id)
+                lastSavedNodeHash.remove(entity.id)
                 changedNodeIds.add(entity.id) // 也要从 FTS 删除
             }
         }

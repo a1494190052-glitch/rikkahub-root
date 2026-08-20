@@ -16,15 +16,43 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.TextUnit
 import ru.noties.jlatexmath.JLatexMathDrawable
 import ru.noties.jlatexmath.JLatexMathSplitter
+import java.util.LinkedHashMap
+
+/**
+ * 行内公式尺寸测量结果缓存：同一 (公式,字号) 常量复用 Rect，
+ * 避免长对话/流式渲染时反复重建 JLatexMathDrawable（测量阶段的主要开销）。
+ * 简单 LRU（子类 LinkedHashMap accessOrder 模式），超过上限淘汰最旧。
+ */
+private class LatexSizeKey(val latex: String, val fontSize: Float) {
+    override fun equals(other: Any?) =
+        other is LatexSizeKey && other.latex == latex && other.fontSize == fontSize
+    override fun hashCode() = latex.hashCode() * 31 + fontSize.hashCode()
+}
+
+/** Java 版 LRU 缓存（Kotlin 覆盖 removeEldestEntry 用 MutableMap.MutableEntry） */
+private class LatexSizeCache : LinkedHashMap<LatexSizeKey, Rect>(64, 0.75f, true) {
+    override fun removeEldestEntry(eldest: MutableMap.MutableEntry<LatexSizeKey, Rect>?): Boolean = size > 256
+}
+
+private val latexSizeCache = LatexSizeCache()
 
 fun assumeLatexSize(latex: String, fontSize: Float): Rect {
-    return runCatching {
+    val key = LatexSizeKey(latex, fontSize)
+    synchronized(latexSizeCache) {
+        latexSizeCache[key]?.let { return it }
+    }
+    // 缓存未命中：构建一次 Drawable 测量尺寸并存回缓存
+    val measured = runCatching {
         JLatexMathDrawable.builder(latex)
             .textSize(fontSize)
             .padding(0)
             .build()
             .bounds
     }.getOrElse { Rect(0, 0, 0, 0) }
+    synchronized(latexSizeCache) {
+        latexSizeCache[key] = measured
+    }
+    return measured
 }
 
 @Composable

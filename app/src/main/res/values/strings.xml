@@ -139,6 +139,8 @@
   <string name="assistant_page_tab_basic">Basic Settings</string>
   <string name="assistant_page_tab_extensions">Extensions</string>
   <string name="assistant_page_tab_local_tools">Local Tools</string>
+  <string name="assistant_page_tab_subagent">Subagents</string>
+  <string name="assistant_detail_subagent_desc">Configure subagent profiles</string>
   <string name="assistant_page_tab_mcp">MCP</string>
   <string name="assistant_page_tab_memory">Memory</string>
   <string name="assistant_page_tab_prompt">Prompts</string>
@@ -1350,4 +1352,34 @@
   <string name="extensions_page_shell_audit_desc">Audit every shell command the AI runs on your device</string>
     <string name="theme_name_claude">Claude</string>
     <string name="theme_name_minimal">极简白</string>
+
+  <!-- MCP Server -->
+  <string name="notification_channel_mcp_server">MCP Server</string>
+  <string name="notification_mcp_server_running">MCP Server Running</string>
+  <string name="notification_mcp_server_starting">Starting...</string>
+  <string name="notification_mcp_server_stop">Stop</string>
+  <string name="setting_page_mcp_server">MCP Server</string>
+  <string name="setting_page_mcp_server_desc">Expose device tools to external MCP clients over Streamable HTTP</string>
+  <string name="setting_page_mcp_server_start">Start</string>
+  <string name="setting_page_mcp_server_stop">Stop</string>
+  <string name="setting_page_mcp_server_port">Port</string>
+  <string name="setting_page_mcp_server_port_desc">MCP server listen port (1024-65535)</string>
+  <string name="setting_page_mcp_server_localhost_only">Only localhost</string>
+  <string name="setting_page_mcp_server_localhost_only_desc">Listen only on localhost (127.0.0.1), disable LAN and mDNS access</string>
+  <string name="setting_page_mcp_server_auth_enable">Enable authentication</string>
+  <string name="setting_page_mcp_server_auth_enable_desc">Require a Bearer token to call tools. Keep this on when exposing root shell.</string>
+  <string name="setting_page_mcp_server_token">Access token</string>
+  <string name="setting_page_mcp_server_token_desc">Bearer token required by MCP clients (Authorization: Bearer &lt;token&gt;)</string>
+  <string name="setting_page_mcp_server_token_regenerate">Regenerate token</string>
+  <string name="setting_page_mcp_server_token_regenerate_desc">Generate a new random token. Takes effect on next start.</string>
+  <string name="setting_page_mcp_server_token_copy">Copy token</string>
+  <string name="setting_page_mcp_server_token_copy_desc">Copy the Bearer token to the clipboard</string>
+  <string name="setting_page_mcp_server_lan_address">LAN Address</string>
+  <string name="setting_page_mcp_server_mdns_address">mDNS Address</string>
+  <string name="setting_page_mcp_server_local_address">Local Address</string>
+  <string name="setting_page_mcp_server_address_note">Address Notes</string>
+  <string name="setting_page_mcp_server_address_note_desc">Point your MCP client at the /mcp path, e.g. http://address:port/mcp. LAN uses the device WiFi IP (same network only); mDNS uses the .local hostname; Local uses localhost (this device only).</string>
+  <string name="setting_page_mcp_server_approval_note">Approval Bypass</string>
+  <string name="setting_page_mcp_server_approval_note_desc">MCP calls run tools directly and bypass the in-app per-call approval UI. The Bearer token is the authorization boundary: anyone holding it can run all exposed tools, including root shell.</string>
+  <string name="setting_page_mcp_server_error">Error</string>
 </resources>

@@ -57,6 +57,8 @@ data class Conversation(
     }
 
     fun updateCurrentMessages(messages: List<UIMessage>): Conversation {
+        // 2026-07-31 诊断版：H2 节点级复制暂时回退到原版（无条件复制），
+        // 排查 r253 发消息无回复问题；确认根因后再恢复优化。
         val newNodes = this.messageNodes.toMutableList()
 
         messages.forEachIndexed { index, message ->
@@ -118,6 +120,13 @@ data class MessageNode(
     } else {
         messages[selectIndex]
     }
+
+    /**
+     * 轻量内容指纹：基于消息列表的确定性值哈希（UIMessage/UIMessagePart 均为
+     * data class，内容相同则 hash 相同）。用于保存前快速判断节点是否变化，
+     * 避免对未变节点做全量 JSON 序列化比较。64 位混合，碰撞概率工程上可忽略。
+     */
+    fun quickHash(): Long = messages.hashCode().toLong() * 31 + selectIndex
 
     val role get() = messages.firstOrNull()?.role ?: MessageRole.USER
 

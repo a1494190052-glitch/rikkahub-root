@@ -79,7 +79,7 @@ fun ColumnScope.ChatMessageActionButtons(
     onContinue: (() -> Unit)? = null,
 ) {
     val context = LocalContext.current
-    val settings = LocalSettings.current
+    val settings = LocalSettings.current.settings
     var isPendingDelete by remember { mutableStateOf(false) }
     var showTranslateDialog by remember { mutableStateOf(false) }
     var showRegenerateConfirm by remember { mutableStateOf(false) }

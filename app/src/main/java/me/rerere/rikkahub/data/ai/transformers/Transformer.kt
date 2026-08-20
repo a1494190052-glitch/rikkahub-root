@@ -104,6 +104,31 @@ suspend fun List<UIMessage>.visualTransforms(
     }
 }
 
+/**
+ * 增量视觉变换：只对最后一条消息执行 visualTransform，其余复用原引用。
+ * 流式输出时只有末条消息在变，全列表变换（ThinkTag/RegexOutput 正则扫描
+ * 每条消息）在每 80ms 节流周期内是纯浪费；末条未变化时返回原列表（引用相等）。
+ */
+suspend fun List<UIMessage>.visualTransformLast(
+    transformers: List<MessageTransformer>,
+    context: Context,
+    model: Model,
+    assistant: Assistant,
+    settings: Settings,
+): List<UIMessage> {
+    if (isEmpty()) return this
+    val ctx = TransformerContext(context, model, assistant, settings)
+    val last = this[lastIndex]
+    val transformed = transformers.fold(listOf(last)) { acc, transformer ->
+        if (transformer is OutputMessageTransformer) {
+            transformer.visualTransform(ctx, acc)
+        } else {
+            acc
+        }
+    }.first()
+    return if (transformed === last) this else toMutableList().also { it[it.lastIndex] = transformed }
+}
+
 suspend fun List<UIMessage>.onGenerationFinish(
     transformers: List<MessageTransformer>,
     context: Context,

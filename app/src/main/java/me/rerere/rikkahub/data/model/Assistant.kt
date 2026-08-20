@@ -96,10 +96,14 @@ private val regexCache = SimpleCache.builder<String, Result<Regex>>()
     .expireAfterWrite(10, TimeUnit.MINUTES)
     .build()
 
-private fun compileRegexCached(pattern: String): Regex? {
-    regexCache.getIfPresent(pattern)?.let { return it.getOrNull() }
-    val result = runCatching { Regex(pattern) }.onFailure { it.printStackTrace() }
-    regexCache.put(pattern, result)
+private fun compileRegexCached(
+    pattern: String,
+    options: Set<RegexOption> = emptySet(),
+): Regex? {
+    val cacheKey = if (options.isEmpty()) pattern else pattern + '\u0000' + options.hashCode()
+    regexCache.getIfPresent(cacheKey)?.let { return it.getOrNull() }
+    val result = runCatching { Regex(pattern, options) }.onFailure { it.printStackTrace() }
+    regexCache.put(cacheKey, result)
     return result.getOrNull()
 }
 
@@ -231,7 +235,8 @@ fun PromptInjection.RegexInjection.isTriggered(context: String): Boolean {
         if (useRegex) {
             try {
                 val options = if (caseSensitive) emptySet() else setOf(RegexOption.IGNORE_CASE)
-                Regex(keyword, options).containsMatchIn(context)
+                // 复用文件内已有的编译缓存（SimpleCache 10min TTL），避免每条消息重复 Regex.compile
+                compileRegexCached(keyword, options)?.containsMatchIn(context) ?: false
             } catch (e: Exception) { false }
         } else {
             if (caseSensitive) context.contains(keyword) else context.contains(keyword, ignoreCase = true)

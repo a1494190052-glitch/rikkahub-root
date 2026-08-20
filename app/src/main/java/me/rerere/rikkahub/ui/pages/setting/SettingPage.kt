@@ -243,6 +243,12 @@ fun SettingPage(vm: SettingVM = koinViewModel()) {
                         supportingContent = { Text(stringResource(R.string.setting_page_web_server_desc)) },
                         headlineContent = { Text(stringResource(R.string.setting_page_web_server)) },
                     )
+                    item(
+                        onClick = { navController.navigate(Screen.SettingMcpServer) },
+                        leadingContent = { Icon(HugeIcons.McpServer, null) },
+                        supportingContent = { Text(stringResource(R.string.setting_page_mcp_server_desc)) },
+                        headlineContent = { Text(stringResource(R.string.setting_page_mcp_server)) },
+                    )
                 }
             }
 

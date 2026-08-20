@@ -66,7 +66,7 @@ class SubagentHost(
         onProgress: ((List<UIMessage>) -> Unit)? = null,
         onSessionComplete: ((sessionId: String, session: SubagentSessionData) -> Unit)? = null,
     ): SubagentResult {
-        if (depth >= maxDepth) {
+        if (depth > maxDepth) {
             return SubagentResult(profileName = profile.name, summary = "", succeeded = false, error = "Subagent recursion depth limit reached ($maxDepth)", depth = depth)
         }
 

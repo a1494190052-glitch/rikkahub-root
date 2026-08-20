@@ -41,7 +41,9 @@ import java.io.File
 import me.rerere.rikkahub.data.ai.transformers.onGenerationFinish
 import me.rerere.rikkahub.data.ai.transformers.transforms
 import me.rerere.rikkahub.data.ai.transformers.visualTransforms
+import me.rerere.rikkahub.data.ai.transformers.visualTransformLast
 import me.rerere.rikkahub.data.ai.tools.buildMemoryTools
+import me.rerere.rikkahub.service.LiveUpdateManager
 import me.rerere.rikkahub.data.datastore.Settings
 import me.rerere.rikkahub.data.datastore.findModelById
 import me.rerere.rikkahub.data.datastore.findProvider
@@ -92,40 +94,49 @@ class GenerationHandler(
         val provider = model.findProvider(settings.providers) ?: error("Provider not found")
         val providerImpl = providerManager.getProviderByType(provider)
 
+        // [LiveUpdateManager] Show agent status notification (H-1c)
+        LiveUpdateManager.updateStatus(context, "Agent thinking...", null)
+
         var messages: List<UIMessage> = messages
+
+        // [ToolLoopDetector] Per-generation loop detector — prevents agent
+        // tool-call loops (hallucinated tools, infinite polls, repeated calls).
+        // Ported from OpenMinis.
+        val loopDetector = ToolLoopDetector(json = json)
+
+        // 工具列表在生成过程中不变化：循环外构建一次，避免每 step 重建（maxSteps 可达 256）
+        val toolsInternal = buildList {
+            Log.i(TAG, "generateInternal: build tools($assistant)")
+            if (assistant?.enableMemory == true) {
+                val memoryAssistantId = if (assistant.useGlobalMemory) {
+                    MemoryRepository.GLOBAL_MEMORY_ID
+                } else {
+                    assistant.id.toString()
+                }
+                buildMemoryTools(
+                    json = json,
+                    onCreation = { content ->
+                        memoryRepo.addMemory(memoryAssistantId, content)
+                    },
+                    onUpdate = { id, content ->
+                        memoryRepo.updateContent(id, content)
+                    },
+                    onDelete = { id ->
+                        memoryRepo.deleteMemory(id)
+                    },
+                    onSearch = { query, topK ->
+                        memoryRepo.searchMemories(memoryAssistantId, query, topK)
+                    },
+                    onRecall = { context, topK ->
+                        memoryRepo.getRelevantMemories(memoryAssistantId, context, topK)
+                    },
+                ).let(this::addAll)
+            }
+            addAll(tools)
+        }.distinctBy { it.name }
 
         for (stepIndex in 0 until maxSteps) {
             Log.i(TAG, "streamText: start step #$stepIndex (${model.id})")
-
-            val toolsInternal = buildList {
-                Log.i(TAG, "generateInternal: build tools($assistant)")
-                if (assistant?.enableMemory == true) {
-                    val memoryAssistantId = if (assistant.useGlobalMemory) {
-                        MemoryRepository.GLOBAL_MEMORY_ID
-                    } else {
-                        assistant.id.toString()
-                    }
-                    buildMemoryTools(
-                        json = json,
-                        onCreation = { content ->
-                            memoryRepo.addMemory(memoryAssistantId, content)
-                        },
-                        onUpdate = { id, content ->
-                            memoryRepo.updateContent(id, content)
-                        },
-                        onDelete = { id ->
-                            memoryRepo.deleteMemory(id)
-                        },
-                        onSearch = { query, topK ->
-                            memoryRepo.searchMemories(memoryAssistantId, query, topK)
-                        },
-                        onRecall = { context, topK ->
-                            memoryRepo.getRelevantMemories(memoryAssistantId, context, topK)
-                        },
-                    ).let(this::addAll)
-                }
-                addAll(tools)
-            }
 
             // Check if we have tool calls ready to continue after user interaction.
             val pendingTools = messages.lastOrNull()?.getTools()?.filter {
@@ -142,13 +153,9 @@ class GenerationHandler(
                     settings = settings,
                     messages = messages,
                     onUpdateMessages = {
-                        messages = it.transforms(
-                            transformers = outputTransformers,
-                            context = context,
-                            model = model,
-                            assistant = assistant,
-                            settings = settings
-                        )
+                        // outputTransformers 的 transform 均为 identity（视觉变换走 visualTransform），
+                        // 流式路径直接推进原始消息，避免每 chunk 对完整列表白跑 transforms。
+                        messages = it
                         // 流式节流: 限制 UI emit 频率(~12次/秒)。messages 每 chunk 都更新保证正确，
                         // 完整最终状态由工具循环后的 emit 兜底，故跳过中间 emit 安全。
                         val now = System.currentTimeMillis()
@@ -156,7 +163,8 @@ class GenerationHandler(
                             lastStreamEmit = now
                             emit(
                                 GenerationChunk.Messages(
-                                    messages.visualTransforms(
+                                    // 增量视觉变换：流式只有最后一条消息在变，仅变换末条，其余复用
+                                    messages.visualTransformLast(
                                         transformers = outputTransformers,
                                         context = context,
                                         model = model,
@@ -259,6 +267,19 @@ class GenerationHandler(
             // 结果按 toolCallId 匹配回填, 与顺序无关; 任一工具抛 CancellationException 时
             // coroutineScope 会取消其余工具并向上传播(用户停止生成).
             val hasShellAccess = toolsInternal.any { it.name == "workspace_shell" }
+
+            // [ToolLoopDetector] Sequential pre-check BEFORE parallel execution
+            val blockedTools = mutableSetOf<String>()  // toolCallIds to block
+            for (tool in toolsToProcess) {
+                if (tool.approvalState is ToolApprovalState.Approved || tool.approvalState is ToolApprovalState.Auto) {
+                    val loopCheck = loopDetector.check(tool.toolName, tool.input.ifBlank { "{}" })
+                    if (loopCheck.level == LoopLevel.CRITICAL) {
+                        Log.w(TAG, "ToolLoopDetector BLOCKED ${tool.toolName}: ${loopCheck.message}")
+                        blockedTools.add(tool.toolCallId)
+                    }
+                }
+            }
+
             val executedTools = coroutineScope {
                 toolsToProcess.map { tool ->
                     async {
@@ -299,6 +320,18 @@ class GenerationHandler(
 
                             else -> {
                                 // Auto or Approved - execute the tool
+
+                                // [ToolLoopDetector] Check if this tool was blocked by sequential pre-check
+                                if (tool.toolCallId in blockedTools) {
+                                    return@async tool.copy(
+                                        output = listOf(UIMessagePart.Text(
+                                            json.encodeToString(buildJsonObject {
+                                                put("error", JsonPrimitive("[LOOP BLOCKED] Tool call blocked by loop detector. Stop repeating this call."))
+                                            })
+                                        ))
+                                    )
+                                }
+
                                 runCatching {
                                     val toolDef = toolsInternal.find { toolDef -> toolDef.name == tool.toolName }
                                         ?: error("Tool ${tool.toolName} not found")
@@ -309,6 +342,7 @@ class GenerationHandler(
                                     }
                                     Log.i(TAG, "generateText: executing tool ${toolDef.name} with args: $args")
                                     val result = toolDef.execute(args)
+
                                     tool.copy(
                                         output = maybeTruncateToolOutput(tool.toolCallId, result, hasShellAccess)
                                     )
@@ -340,6 +374,19 @@ class GenerationHandler(
                 }.map { it.await() }.filterNotNull()
             }
 
+            // [ToolLoopDetector] Sequential post-record AFTER parallel execution
+            for (executedTool in executedTools) {
+                val resultText = executedTool.output.filterIsInstance<UIMessagePart.Text>()
+                    .joinToString("\n") { it.text }
+                val isError = resultText.contains("\"error\"")
+                loopDetector.record(
+                    toolName = executedTool.toolName,
+                    argsJson = executedTool.input.ifBlank { "{}" },
+                    result = if (isError) null else resultText.take(2000),
+                    errorMessage = if (isError) resultText.take(500) else null,
+                )
+            }
+
             if (executedTools.isEmpty()) {
                 // No results to add (all tools were pending)
                 break
@@ -365,6 +412,9 @@ class GenerationHandler(
                 )
             )
         }
+
+        // [LiveUpdateManager] Dismiss notification when generation completes (H-1c)
+        LiveUpdateManager.dismiss(context)
 
     }.flowOn(Dispatchers.IO)
 

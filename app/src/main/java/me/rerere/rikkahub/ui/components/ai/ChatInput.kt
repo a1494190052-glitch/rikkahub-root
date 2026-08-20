@@ -123,6 +123,7 @@ fun ChatInput(
     loading: Boolean,
     settings: Settings,
     hazeState: HazeState,
+    scrolling: Boolean = false,
     enableSearch: Boolean,
     onToggleSearch: (Boolean) -> Unit,
     modifier: Modifier = Modifier,
@@ -139,6 +140,9 @@ fun ChatInput(
     val assistant = settings.getCurrentAssistant()
     val hazeTintColor = MaterialTheme.colorScheme.surfaceContainerLow
     val inputHazeStyle = HazeMaterials.thin(containerColor = hazeTintColor)
+    // 滚动中暂停毛玻璃模糊：Haze 每帧重采样模糊源（背景图+列表内容）是滑动掉帧的主要来源，
+    // 滚动时输入栏回退到纯色 tint，滚动停止 200ms 后恢复（见 ChatPage 的 listScrolling 驱动）。
+    val blurEnabled = settings.displaySetting.enableBlurEffect && !scrolling
 
     val keyboardController = LocalSoftwareKeyboardController.current
     val focusManager = LocalFocusManager.current
@@ -213,7 +217,7 @@ fun ChatInput(
                     .fillMaxWidth()
                     .clip(containerShape)
                     .then(
-                        if (settings.displaySetting.enableBlurEffect) Modifier.hazeEffect(
+                        if (blurEnabled) Modifier.hazeEffect(
                             state = hazeState
                         ) {
                             blurEffect {
@@ -225,7 +229,7 @@ fun ChatInput(
                 shape = containerShape,
                 tonalElevation = 0.dp,
                 border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
-                color = if (settings.displaySetting.enableBlurEffect) Color.Transparent else hazeTintColor,
+                color = if (blurEnabled) Color.Transparent else hazeTintColor,
             ) {
                 Column(
                     modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
@@ -430,7 +434,7 @@ private fun TextInputRow(
     completionProviders: List<ChatCompletionProvider>,
     onSendMessage: () -> Unit,
 ) {
-    val settings = LocalSettings.current
+    val settings = LocalSettings.current.settings
     val filesManager: FilesManager = koinInject()
     val assistant = settings.getCurrentAssistant()
     val quickMessages = remember(settings.quickMessages, assistant.quickMessageIds) {

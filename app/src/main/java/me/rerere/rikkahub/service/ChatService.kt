@@ -111,6 +111,7 @@ import java.util.concurrent.ConcurrentHashMap
 import kotlin.uuid.Uuid
 
 private const val TAG = "ChatService"
+private const val MAX_ERRORS = 50
 
 internal fun backgroundTextGenerationParams(
     model: Model,
@@ -250,7 +251,8 @@ class ChatService(
     ) {
         if (error is CancellationException) return
         _errors.update {
-            it + ChatError(title = title, error = error, conversationId = conversationId, solution = solution)
+            (it + ChatError(title = title, error = error, conversationId = conversationId, solution = solution))
+                .takeLast(MAX_ERRORS)
         }
     }
 

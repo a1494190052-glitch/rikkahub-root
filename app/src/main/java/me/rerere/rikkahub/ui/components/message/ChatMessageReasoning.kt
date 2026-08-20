@@ -14,7 +14,6 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LocalTextStyle
@@ -82,7 +81,7 @@ private class ReasoningState(
 
 @Composable
 private fun rememberReasoningState(reasoning: UIMessagePart.Reasoning): Pair<ReasoningState, Boolean> {
-    val settings = LocalSettings.current
+    val settings = LocalSettings.current.settings
     val loading = reasoning.finishedAt == null
     val scrollState = rememberScrollState()
 
@@ -179,15 +178,8 @@ private fun ReasoningContent(
                 modifier = Modifier.fillMaxSize(),
             )
         }
-        // 流式生成期间不启用 SelectionContainer，避免 selectable 列表并发修改导致的
-        // ConcurrentModificationException（详见 ChatMessage.kt 文本块同样处理）。
-        if (loading) {
-            reasoningContent()
-        } else {
-            SelectionContainer {
-                reasoningContent()
-            }
-        }
+        // 不使用 SelectionContainer：可选择文本慢路径在长对话滚动时显著掉帧（详见 ChatMessage.kt）。
+        reasoningContent()
     }
 }
 
