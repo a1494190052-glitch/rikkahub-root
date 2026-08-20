@@ -307,6 +307,38 @@ val DEFAULT_PROVIDERS = listOf(
                     }
                 }
             )
-        }
+        },
+    ),
+    ProviderSetting.Dsh(
+        id = Uuid.parse("f3a1c2d4-5e6b-4f8a-9c0d-1e2f3a4b5c6d"),
+        name = "DeepSeek Harness (DSH)",
+        baseUrl = "http://127.0.0.1:3080",
+        enabled = true,
+        builtIn = true,
+        agentPreset = "standard",
+        sandboxMode = "workspace-write",
+        reasoningEffort = "high",
+        models = listOf(
+            Model(
+                id = Uuid.parse("aaaa0001-0000-4000-8000-000000000001"),
+                modelId = "standard",
+                displayName = "标准模式 (Standard)",
+            ),
+            Model(
+                id = Uuid.parse("aaaa0001-0000-4000-8000-000000000002"),
+                modelId = "minimal",
+                displayName = "极简模式 (Minimal)",
+            ),
+            Model(
+                id = Uuid.parse("aaaa0001-0000-4000-8000-000000000003"),
+                modelId = "code",
+                displayName = "PTC 模式 (Code)",
+            ),
+            Model(
+                id = Uuid.parse("aaaa0001-0000-4000-8000-000000000004"),
+                modelId = "cordis",
+                displayName = "创造模式 (Cordis)",
+            ),
+        ),
     ),
 )

@@ -75,6 +75,22 @@ val appModule = module {
                     ),
                 ),
             ),
+            chrootRunner = me.rerere.workspace.ChrootShellRunner(
+                extraBindMounts = listOf(
+                    me.rerere.workspace.WorkspaceBindMount(
+                        source = java.io.File(context.filesDir, me.rerere.rikkahub.data.files.FileFolders.SKILLS).apply { mkdirs() },
+                        target = "/skills",
+                    ),
+                    me.rerere.workspace.WorkspaceBindMount(
+                        source = java.io.File(context.filesDir, me.rerere.rikkahub.data.files.FileFolders.TOOL_OUTPUTS).apply { mkdirs() },
+                        target = "/tool_outputs",
+                    ),
+                    me.rerere.workspace.WorkspaceBindMount(
+                        source = java.io.File(context.filesDir, me.rerere.rikkahub.data.files.FileFolders.UPLOAD).apply { mkdirs() },
+                        target = "/upload",
+                    ),
+                ),
+            ),
             rootModeProvider = { get<me.rerere.rikkahub.data.datastore.SettingsStore>().settingsFlow.value.workspaceRootMode },
             auditLogger = get(),
         )

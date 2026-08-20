@@ -318,8 +318,9 @@ class ShellSessionManager(
 
     /** 会话 key 携带执行模式: root 模式切换后旧 proot 会话不会被误用 */
     private fun sessionKey(root: String?): String {
-        val mode = if (isRootMode()) "su" else "proot"
-        return if (root == null) "host_root" else "ws:$mode:$root"
+        if (root == null) return "host_root"
+        val mode = if (isRootMode()) "chroot" else "proot"
+        return "ws:$mode:$root"
     }
 
     private fun mapCwd(root: String?, cwd: String?): String? {
@@ -327,9 +328,8 @@ class ShellSessionManager(
         if (root == null) return cwd // 宿主机会话: cwd 原样(绝对路径)
         val trimmed = cwd.trim().trim('/')
         return if (isRootMode()) {
-            // root 模式: 真实文件系统路径
-            val base = File(File(baseDir, root), "files").absolutePath
-            if (trimmed.isEmpty()) base else "$base/$trimmed"
+            // 方案 A (chroot): workspace 已 bind 到 rootfs 的 /workspace, 用相对路径
+            if (trimmed.isEmpty()) "/workspace" else "/workspace/$trimmed"
         } else {
             // proot 模式: /workspace 相对路径
             if (trimmed.isEmpty()) "/workspace" else "/workspace/$trimmed"
@@ -337,25 +337,22 @@ class ShellSessionManager(
     }
 
     private fun createSession(root: String?): PersistentShellSession {
-        return if (root == null || isRootMode()) {
-            val su = SuFinder.find()
-            val builder = ProcessBuilder(su)
-            val dir = initialHostDir(root)
-            if (dir != null && dir.isDirectory) builder.directory(dir)
-            // su 会话: destroy 杀不掉 root 子进程树, 需要 su 兜底清理, 防止 root 进程成孤儿
-            PersistentShellSession.start(
-                tag = if (root == null) "host-root" else "root:$root",
-                builder = builder,
-                killTreeWithSu = true,
-            )
-        } else {
-            createProotSession(root)
+        return when {
+            // 方案 A: root 模式下 workspace 沙箱改用 chroot 进 rootfs（隔离 + 高性能）
+            root != null && isRootMode() -> createChrootSession(root)
+            // 宿主机 root 会话 (root_shell 工具用, 保持 host su 直跑)
+            root == null -> {
+                val su = SuFinder.find()
+                val builder = ProcessBuilder(su)
+                // su 会话: destroy 杀不掉 root 子进程树, 需要 su 兜底清理, 防止 root 进程成孤儿
+                PersistentShellSession.start(
+                    tag = "host-root",
+                    builder = builder,
+                    killTreeWithSu = true,
+                )
+            }
+            else -> createProotSession(root)
         }
-    }
-
-    private fun initialHostDir(root: String?): File? {
-        if (root == null) return null
-        return File(File(baseDir, root), "files")
     }
 
     private fun createProotSession(root: String): PersistentShellSession {
@@ -414,6 +411,59 @@ class ShellSessionManager(
         return PersistentShellSession.start(tag = "proot:$root", builder = builder)
     }
 
+    /**
+     * 方案 A: 通过 chroot 在 rootfs 内启动持久 bash 会话（需要 root）。
+     * 启动前先把 workspace 文件区 bind mount 到 rootfs 的 /workspace，
+     * 并挂载 /dev /proc /sys 及 extraBindMounts（skills/tool_outputs/upload）。
+     */
+    private fun createChrootSession(root: String): PersistentShellSession {
+        val wsDir = File(baseDir, root)
+        val filesDir = File(wsDir, "files").apply { mkdirs() }
+        val linuxDir = File(wsDir, "linux")
+        require(File(linuxDir, "bin/sh").isFile) { "Rootfs is not installed" }
+        patcher.patch(linuxDir)
+
+        // 1. bind mounts（幂等, 已挂载则跳过）
+        val mountScript = buildChrootMountScript(linuxDir, filesDir)
+        runCatching {
+            val su = SuFinder.find()
+            val p = Runtime.getRuntime().exec(arrayOf(su, "-c", mountScript))
+            p.waitFor(15, java.util.concurrent.TimeUnit.SECONDS)
+        }
+
+        // 2. 启动持久 chroot bash 会话（stdin 保持打开供 PersistentShellSession.exec 写入）
+        val su = SuFinder.find()
+        val chrootCmd = "chroot ${linuxDir.absolutePath} /bin/bash --noprofile --norc"
+        val builder = ProcessBuilder(su, "-c", chrootCmd)
+            .directory(filesDir)
+        // chroot 会话的 root 子进程树需 su 兜底清理
+        return PersistentShellSession.start(tag = "chroot:$root", builder = builder, killTreeWithSu = true)
+    }
+
+    /** 构建 chroot 前的 bind mount 脚本（workspace / extraBindMounts / dev / proc / sys） */
+    private fun buildChrootMountScript(linuxDir: File, filesDir: File): String {
+        val ld = linuxDir.absolutePath
+        val sb = StringBuilder()
+        sb.append("mkdir -p $ld/workspace $ld/dev $ld/proc $ld/sys")
+        extraBindMounts.forEach { mount ->
+            if (mount.source.exists()) {
+                sb.append(" $ld/").append(mount.target.trim('/'))
+            }
+        }
+        sb.append('\n')
+        sb.append("grep -q \" $ld/workspace \" /proc/mounts || mount --bind ${filesDir.absolutePath} $ld/workspace\n")
+        if (File("/dev").exists()) sb.append("grep -q \" $ld/dev \" /proc/mounts || mount --bind /dev $ld/dev\n")
+        if (File("/proc").exists()) sb.append("grep -q \" $ld/proc \" /proc/mounts || mount -t proc proc $ld/proc\n")
+        if (File("/sys").exists()) sb.append("grep -q \" $ld/sys \" /proc/mounts || mount -t sysfs sys $ld/sys\n")
+        extraBindMounts.forEach { mount ->
+            if (mount.source.exists()) {
+                val target = "$ld/${mount.target.trim('/')}"
+                sb.append("grep -q \" $target \" /proc/mounts || mount --bind ${mount.source.absolutePath} $target\n")
+            }
+        }
+        return sb.toString()
+    }
+
     /** 回收空闲会话, 返回回收数量 */
     fun reapIdleSessions(maxIdleMillis: Long = IDLE_TIMEOUT_MS): Int {
         val now = System.currentTimeMillis()
@@ -431,8 +481,8 @@ class ShellSessionManager(
     }
 
     fun close(root: String) {
-        // 两种模式的会话都关掉
-        listOf("ws:su:$root", "ws:proot:$root").forEach { key ->
+        // 三种模式的会话都关掉 (su / proot / chroot)
+        listOf("ws:su:$root", "ws:proot:$root", "ws:chroot:$root").forEach { key ->
             sessions.remove(key)?.destroy()
             lastUsedAt.remove(key)
         }

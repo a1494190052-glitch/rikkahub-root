@@ -6,6 +6,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import me.rerere.rikkahub.data.db.entity.ShellAuditEntity
+import me.rerere.workspace.ChrootShellRunner
 import me.rerere.workspace.ProotShellRunner
 import me.rerere.workspace.WorkspaceShellContext
 import java.io.File
@@ -41,6 +42,7 @@ class BackgroundShellManager(
     filesDir: File,
     private val workspacesDir: File,
     private val prootRunner: ProotShellRunner,
+    private val chrootRunner: ChrootShellRunner,
     private val rootModeProvider: () -> Boolean,
     private val auditLogger: ShellAuditLogger,
 ) {
@@ -127,10 +129,25 @@ class BackgroundShellManager(
         logFile: File,
     ): Process {
         return if (rootMode) {
-            val wsFiles = File(File(workspacesDir, root), "files")
-            val workDir = if (cwd.isBlank()) wsFiles else File(wsFiles, cwd)
-            ProcessBuilder("su", "-c", command)
-                .directory(workDir.takeIf { it.isDirectory } ?: wsFiles)
+            // 方案 A: root 模式下后台任务改用 chroot 进 rootfs 执行
+            val wsDir = File(workspacesDir, root)
+            val filesDir = File(wsDir, "files")
+            val workDir = if (cwd.isBlank()) filesDir else File(filesDir, cwd)
+            require(workDir.isDirectory) { "Working directory does not exist: $cwd" }
+            val context = WorkspaceShellContext(
+                root = root,
+                command = command,
+                cwd = cwd,
+                filesDir = filesDir,
+                linuxDir = File(wsDir, "linux"),
+                tempDir = File(wsDir, "tmp"),
+                workingDir = workDir,
+                timeoutMillis = 0,
+                stdin = null,
+            )
+            val builder = chrootRunner.buildProcessBuilderOrNull(context)
+                ?: error("Rootfs is not installed or chroot is unavailable")
+            builder
                 .redirectErrorStream(true)
                 .redirectOutput(java.lang.ProcessBuilder.Redirect.appendTo(logFile))
                 .start()

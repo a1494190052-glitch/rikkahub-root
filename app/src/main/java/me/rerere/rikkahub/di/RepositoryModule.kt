@@ -12,6 +12,7 @@ import me.rerere.rikkahub.data.repository.FilesRepository
 import me.rerere.rikkahub.data.repository.GenMediaRepository
 import me.rerere.rikkahub.data.repository.MemoryRepository
 import me.rerere.rikkahub.data.repository.WorkspaceRepository
+import me.rerere.workspace.ChrootShellRunner
 import me.rerere.workspace.ProotShellRunner
 import me.rerere.workspace.RootfsInstaller
 import me.rerere.workspace.WorkspaceBindMount
@@ -49,6 +50,20 @@ val repositoryModule = module {
 
     single {
         val context: Context = get()
+        val extraBindMounts = listOf(
+            WorkspaceBindMount(
+                source = File(context.filesDir, FileFolders.SKILLS).apply { mkdirs() },
+                target = "/skills",
+            ),
+            WorkspaceBindMount(
+                source = File(context.filesDir, FileFolders.TOOL_OUTPUTS).apply { mkdirs() },
+                target = "/tool_outputs",
+            ),
+            WorkspaceBindMount(
+                source = File(context.filesDir, FileFolders.UPLOAD).apply { mkdirs() },
+                target = "/upload",
+            ),
+        )
         WorkspaceManager(
             baseDir = File(context.filesDir, "workspaces"),
             rootModeProvider = {
@@ -56,21 +71,10 @@ val repositoryModule = module {
             },
             shellRunner = ProotShellRunner(
                 nativeLibraryDir = File(context.applicationInfo.nativeLibraryDir),
-                extraBindMounts = listOf(
-                    WorkspaceBindMount(
-                        source = File(context.filesDir, FileFolders.SKILLS).apply { mkdirs() },
-                        target = "/skills",
-                    ),
-                    WorkspaceBindMount(
-                        source = File(context.filesDir, FileFolders.TOOL_OUTPUTS).apply { mkdirs() },
-                        target = "/tool_outputs",
-                    ),
-                    WorkspaceBindMount(
-                        source = File(context.filesDir, FileFolders.UPLOAD).apply { mkdirs() },
-                        target = "/upload",
-                    ),
-                ),
-            )
+                extraBindMounts = extraBindMounts,
+            ),
+            // 方案 A: Root 模式下 workspace 沙箱用 chroot 进 rootfs（替代 host su 直跑）
+            chrootRunner = ChrootShellRunner(extraBindMounts = extraBindMounts),
         )
     }
 

@@ -82,6 +82,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.collectLatest
 import me.rerere.ai.provider.Model
 import me.rerere.ai.provider.ModelAbility
+import me.rerere.ai.provider.ProviderSetting
 import me.rerere.ai.provider.ModelType
 import me.rerere.asr.ASRStatus
 import me.rerere.hugeicons.HugeIcons
@@ -92,6 +93,8 @@ import me.rerere.hugeicons.stroke.FullScreen
 import me.rerere.hugeicons.stroke.Zap
 import me.rerere.rikkahub.R
 import me.rerere.rikkahub.data.datastore.Settings
+import me.rerere.rikkahub.data.datastore.SettingsStore
+import me.rerere.rikkahub.data.datastore.findProvider
 import me.rerere.rikkahub.data.datastore.getCurrentAssistant
 import me.rerere.rikkahub.data.datastore.getCurrentChatModel
 import me.rerere.rikkahub.data.datastore.getQuickMessagesOfAssistant
@@ -261,6 +264,12 @@ fun ChatInput(
                                 type = ModelType.CHAT,
                                 onlyIcon = true,
                                 modifier = Modifier,
+                            )
+
+                            // DSH 权限选择器（仅当当前模型属于 DSH provider 时显示）
+                            DshPermissionSelector(
+                                model = settings.getCurrentChatModel(),
+                                providers = settings.providers,
                             )
 
                             // Search
@@ -837,6 +846,84 @@ private fun FullScreenEditor(
                             focusedContainerColor = Color.Transparent,
                             unfocusedContainerColor = Color.Transparent,
                         ),
+                    )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * DSH 权限选择器：显示在聊天输入框旁的独立下拉，动态切换 DSH 的 sandbox mode。
+ * 仅当当前模型属于 DSH provider 时显示（模式+权限动态组合）。
+ */
+@Composable
+private fun DshPermissionSelector(
+    model: Model?,
+    providers: List<ProviderSetting>,
+) {
+    val dshProvider = model?.findProvider(providers) as? ProviderSetting.Dsh ?: return
+    val settingsStore = koinInject<SettingsStore>()
+    var expanded by remember { mutableStateOf(false) }
+    val sandboxMode = dshProvider.sandboxMode
+    val modeLabel = when (sandboxMode) {
+        "read-only" -> "只读"
+        "workspace-write" -> "工作区"
+        "danger-full-access" -> "完全开放"
+        else -> sandboxMode
+    }
+    IconButton(
+        onClick = { expanded = true },
+        modifier = Modifier.testTag("dsh_permission_selector"),
+    ) {
+        Surface(
+            shape = RoundedCornerShape(50),
+            color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.6f),
+        ) {
+            Text(
+                text = modeLabel,
+                style = MaterialTheme.typography.labelSmall,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
+            )
+        }
+        DropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false },
+        ) {
+            val modes = listOf(
+                "read-only" to "只读 (read-only)",
+                "workspace-write" to "工作区 (workspace-write)",
+                "danger-full-access" to "完全开放 (danger-full-access)",
+            )
+            modes.forEach { (value, label) ->
+                Surface(
+                    onClick = {
+                        expanded = false
+                        if (value != sandboxMode) {
+                            settingsStore.update { oldSettings ->
+                                oldSettings.copy(
+                                    providers = oldSettings.providers.map { p ->
+                                        if (p is ProviderSetting.Dsh && p.id == dshProvider.id) {
+                                            p.copy(sandboxMode = value)
+                                        } else p
+                                    }
+                                )
+                            }
+                        }
+                    },
+                    color = if (value == sandboxMode) {
+                        MaterialTheme.colorScheme.primaryContainer
+                    } else {
+                        Color.Transparent
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text(
+                        text = label,
+                        style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
                     )
                 }
             }

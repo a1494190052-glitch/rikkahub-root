@@ -11,6 +11,7 @@ class WorkspaceManager(
     private val config: WorkspaceConfig = WorkspaceConfig(),
     private val shellRunner: WorkspaceShellRunner = HostShellRunner(),
     private val rootModeProvider: () -> Boolean = { false },
+    private val chrootRunner: WorkspaceShellRunner? = null,
 ) {
     private val rootRunner: WorkspaceShellRunner by lazy { RootShellRunner() }
 
@@ -189,7 +190,11 @@ class WorkspaceManager(
         require(workingDir.exists()) { "Working directory does not exist: $cwd" }
         require(workingDir.isDirectory) { "Working path is not a directory: $cwd" }
 
-        val runner = if (isRootMode()) rootRunner else shellRunner
+        val runner = when {
+            isRootMode() && chrootRunner != null -> chrootRunner
+            isRootMode() -> rootRunner
+            else -> shellRunner
+        }
         return runner.execute(
             WorkspaceShellContext(
                 root = root,

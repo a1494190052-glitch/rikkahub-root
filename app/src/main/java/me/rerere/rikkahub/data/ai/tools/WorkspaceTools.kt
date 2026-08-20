@@ -330,10 +330,10 @@ private fun createShellTool(
     name = "workspace_shell",
     description = buildString {
         if (rootMode) {
-            append("Run a shell command on the Android HOST system with ROOT privileges (via su). ")
-            append("Commands do NOT run inside the workspace Rootfs container; they run on the real device as root. ")
-            append("The workspace files area is NOT mounted at /workspace; use absolute paths under the app's files directory instead. ")
-            append("You can use system tools like pm, am, input, screencap, settings. ")
+            append("Run a shell command inside the workspace Rootfs container as ROOT via chroot (kernel-level, faster than proot). ")
+            append("The workspace files area IS mounted at /workspace (bind-mounted into the rootfs). ")
+            append("Commands run in an isolated rootfs environment, NOT on the Android host. ")
+            append("For Android host system management (pm, am, input, screencap, settings, setprop) use the root_shell tool instead. ")
         } else {
             append("Run a shell command in the assistant's bound workspace Rootfs. The workspace files area is mounted at /workspace. ")
         }
