@@ -55,6 +55,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
@@ -79,6 +80,7 @@ import dev.chrisbanes.haze.blur.blurEffect
 import dev.chrisbanes.haze.blur.materials.HazeMaterials
 import dev.chrisbanes.haze.hazeEffect
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.collectLatest
 import me.rerere.ai.provider.Model
 import me.rerere.ai.provider.ModelAbility
@@ -868,6 +870,7 @@ private fun DshPermissionSelector(
 ) {
     val dshProvider = model?.findProvider(providers) as? ProviderSetting.Dsh ?: return
     val settingsStore = koinInject<SettingsStore>()
+    val coroutineScope = rememberCoroutineScope()
     var expanded by remember { mutableStateOf(false) }
     val sandboxMode = dshProvider.sandboxMode
     val modeLabel = when (sandboxMode) {
@@ -906,14 +909,16 @@ private fun DshPermissionSelector(
                     onClick = {
                         expanded = false
                         if (value != sandboxMode) {
-                            settingsStore.update { oldSettings ->
-                                oldSettings.copy(
-                                    providers = oldSettings.providers.map { p ->
-                                        if (p is ProviderSetting.Dsh && p.id == dshProvider.id) {
-                                            p.copy(sandboxMode = value)
-                                        } else p
-                                    }
-                                )
+                            coroutineScope.launch {
+                                settingsStore.update { oldSettings ->
+                                    oldSettings.copy(
+                                        providers = oldSettings.providers.map { p ->
+                                            if (p is ProviderSetting.Dsh && p.id == dshProvider.id) {
+                                                p.copy(sandboxMode = value)
+                                            } else p
+                                        }
+                                    )
+                                }
                             }
                         }
                     },
